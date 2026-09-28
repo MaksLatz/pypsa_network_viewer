@@ -8,6 +8,7 @@ Author: Priyesh Gosai
 import importlib.util
 import json
 import os
+import re
 import sys
 
 import pandas as pd
@@ -20,6 +21,9 @@ if _PYPSA_MAJOR < 1:
     )
 
 pypsa.options.api.new_components_api = True
+
+# Buses whose name ends with one of these suffixes are hydro storage buses
+HYDRO_BUS_SUFFIXES = ('Open loop pumping', 'Pondage', 'Reservoir', 'Closed loop pumping')
 
 
 def html_network(network, file_path=None, file_name=None, title="PyPSA Network Analyzer",
@@ -306,6 +310,15 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
             border: 1px solid white;
             vertical-align: middle;
         }}
+        .swatch-inline {{
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 2px;
+            margin: 0 6px 0 2px;
+            vertical-align: middle;
+            border: 1px solid rgba(0,0,0,0.2);
+        }}
         .toggle-btn .caret {{
             margin-left: 8px;
             font-size: 0.85em;
@@ -319,6 +332,9 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
             margin-bottom: 0;
             border-radius: 0 8px 8px 0;
         }}
+        .group-panel .filter-bar + .filter-bar {{
+            border-top: 1px solid #eee;
+        }}
         .unit-bar {{
             display: flex;
             justify-content: flex-end;
@@ -327,6 +343,94 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
         }}
         .unit-bar .control-label {{
             margin-bottom: 0;
+        }}
+        .filter-note {{
+            flex-basis: 100%;
+            color: #7f8c8d;
+            font-size: 0.9em;
+        }}
+        .multi-select {{
+            position: relative;
+        }}
+        .filter-bar .multi-select-toggle,
+        .multi-select-toggle {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+            width: 100%;
+            min-width: 180px;
+            max-width: 260px;
+            padding: 12px;
+            background: white;
+            color: #2c3e50;
+            border: 2px solid #e0e0e0;
+            box-shadow: none;
+            font-weight: 400;
+            text-align: left;
+        }}
+        .multi-select-toggle:hover {{
+            transform: none;
+            box-shadow: none;
+            border-color: #2c3e50;
+        }}
+        .multi-select-summary {{
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }}
+        .multi-select-menu {{
+            display: none;
+            position: absolute;
+            top: calc(100% + 4px);
+            left: 0;
+            z-index: 100;
+            min-width: 100%;
+            max-width: 360px;
+            background: white;
+            border: 2px solid #2c3e50;
+            border-radius: 8px;
+            padding: 8px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+        }}
+        .multi-select.open .multi-select-menu {{
+            display: block;
+        }}
+        .multi-select-search {{
+            width: 100%;
+            box-sizing: border-box;
+            padding: 8px;
+            margin-bottom: 6px;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+        }}
+        .multi-select-options {{
+            max-height: 260px;
+            overflow-y: auto;
+        }}
+        .multi-select-option {{
+            display: block;
+            padding: 6px 4px;
+            white-space: nowrap;
+            cursor: pointer;
+        }}
+        .multi-select-option:hover {{
+            background: #f5f5f5;
+        }}
+        .filter-bar .link-btn,
+        .link-btn {{
+            background: none;
+            color: #2980b9;
+            border: none;
+            box-shadow: none;
+            padding: 4px;
+            font-weight: 600;
+            font-size: 0.9em;
+        }}
+        .link-btn:hover {{
+            transform: none;
+            box-shadow: none;
+            text-decoration: underline;
         }}
         .toggle-bar {{
             display: flex;
@@ -442,30 +546,52 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
         const FILTER_NOTES = {{
             Link: 'p0 &gt; 0 means power flows from bus0 to bus1; negative values indicate flow in the reverse direction.'
         }};
-        const activeFilters = {{}};  // filter state key -> {{ attr: value }}
+        const activeFilters = {{}};  // filter state key -> {{ attr: [selected values] }} (empty = All)
+        let openMultiSelect = null;  // 'stateKey|attr' of the filter dropdown currently open
+        const multiSelectSearch = {{}};  // 'stateKey|attr' -> search text
 
-        // Load vs Generation toggle groups and display state
-        // color links each button to its options panel and (for load/generation/storage) its plot line
+        // Power Balance toggle groups and display state
+        // color links each button to its options panel and its plot line; hint is the button tooltip
         const BALANCE_GROUPS = [
-            {{ key: 'load', label: 'Load', color: '#c0392b' }},
-            {{ key: 'generation', label: 'Generation', color: '#27ae60' }},
-            {{ key: 'carriers', label: 'Generation by Carrier', color: '#e67e22' }},
-            {{ key: 'storage', label: 'Storage Units (net)', color: '#8e44ad' }}
+            {{ key: 'load', label: 'Load', color: '#c0392b',
+               hint: 'Power consumed by the loads at the selected nodes.' }},
+            {{ key: 'generation', label: 'Generation', color: '#27ae60',
+               hint: 'Power produced by the generators at the selected nodes. Opens generator filters and the carrier breakdown.' }},
+            {{ key: 'imports', label: 'Imports', color: '#2980b9',
+               hint: 'Net power reaching the selected nodes through links (into the node +, out of the node −). Hydro storage links are shown separately.' }},
+            {{ key: 'storage', label: 'Storage (net)', color: '#8e44ad',
+               hint: 'Storage units and stores at the selected nodes: discharge +, charging −.' }},
+            {{ key: 'mismatch', label: 'Mismatch', color: '#2c3e50',
+               hint: 'Balance check: Load − (Generation + Imports + Hydro storage + Storage). Should be zero; anything else is power not captured by these plots (e.g. AC line flows).' }}
         ];
+        const HYDRO_COLOR = '#00acc1';
         const BALANCE_UNITS = {{ kW: 1000, MW: 1, GW: 0.001 }};
         const balanceState = {{
-            visible: {{ load: true, generation: true, carriers: false, storage: false }},
+            visible: {{ load: true, generation: true, imports: false, storage: false, mismatch: false }},
             loadSplit: false,        // one load line per bus
             genSplit: false,         // one generation line per bus
+            importSplit: false,      // one import line per bus
+            showCarriers: false,     // add the generation-by-carrier breakdown
             carrierMode: 'stacked',  // 'lines' | 'stacked'
             stackStyle: 'filled',    // 'filled' | 'line'
             unit: 'MW'
         }};
-        // Filter state keys for the Load vs Generation view (kept separate from the component tabs)
-        const BALANCE_LOAD_FILTERS = '__balance_loads';
+        // Filter state keys for the Power Balance view (kept separate from the component tabs)
+        const BALANCE_NODE_FILTERS = '__balance_nodes';  // shared node picker for all plots
         const BALANCE_GEN_FILTERS = '__balance_generators';
         const BUS_COLORS = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd',
                             '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf'];
+        const CARRIER_COLORED_CLASSES = ['Generator', 'StorageUnit', 'Store'];
+        let balanceExport = null;  // what the Power Balance plot currently shows, for CSV download
+
+        // Colour of a carrier: its static 'color' attribute, else a stable fallback from the palette
+        function carrierColor(carrier) {{
+            const colors = networkData.carrier_colors || {{}};
+            if (colors[carrier]) return colors[carrier];
+            let hash = 0;
+            for (const ch of String(carrier)) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
+            return BUS_COLORS[hash % BUS_COLORS.length];
+        }}
 
         document.addEventListener('DOMContentLoaded', function() {{
             populateNetworkSummary();
@@ -514,7 +640,7 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
             if (networkData.balance) {{
                 const opt = document.createElement('option');
                 opt.value = 'load_generation';
-                opt.textContent = 'Load vs Generation';
+                opt.textContent = 'Power Balance';
                 select.appendChild(opt);
             }}
 
@@ -736,12 +862,15 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
             // Attribute filters (carrier / type / bus for generators, bus0 / bus1 for links)
             const filterCfg = getFilterConfig(componentType);
             const totalSeries = Object.keys(seriesData).length;
+            let filterValues = null;
             if (filterCfg) {{
+                filterValues = cascadeFilterValues(componentType, componentType, filterCfg, Object.keys(seriesData));
                 seriesData = applyAttributeFilters(componentType, componentType, filterCfg, seriesData);
             }}
             const shownSeries = Object.keys(seriesData).length;
             const filterHtml = filterCfg
-                ? renderFilterBar(componentType, componentType, filterCfg, totalSeries, shownSeries, {{ id: 'timeseriesFilters' }})
+                ? renderFilterBar(componentType, filterValues, totalSeries, shownSeries,
+                    {{ id: 'timeseriesFilters', note: FILTER_NOTES[getComponentClass(componentType)] }})
                 : '';
 
             contentDiv.innerHTML = `
@@ -762,9 +891,16 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
             }}
             if (shownSeries === 0) return;
 
-            const traces = Object.entries(seriesData).map(([name, values]) => ({{
-                x: timeIndex, y: values, type: 'scatter', mode: 'lines', name, line: {{ width: 2 }}
-            }}));
+            // Generators and storage are coloured by their carrier's static colour (when defined)
+            const carrierCol = CARRIER_COLORED_CLASSES.includes(getComponentClass(componentType))
+                ? networkData.components[componentType].static.carrier : null;
+            const colors = networkData.carrier_colors || {{}};
+            const traces = Object.entries(seriesData).map(([name, values]) => {{
+                const t = {{ x: timeIndex, y: values, type: 'scatter', mode: 'lines', name, line: {{ width: 2 }} }};
+                const carrier = carrierCol ? carrierCol[name] : undefined;
+                if (carrier && colors[carrier]) t.line.color = colors[carrier];
+                return t;
+            }});
 
             Plotly.newPlot('timeseriesPlot', traces, {{
                 title: `${{componentType}} - ${{timeseriesName}}${{periodLabel}}`,
@@ -793,6 +929,7 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
                 if (selectedPeriod) {{
                     const mask = networkData.summary.period_index.map(p => p === selectedPeriod);
                     timeIndex = timeIndex.filter((_, i) => mask[i]);
+                    timeStrings = timeStrings.filter((_, i) => mask[i]);
                     seriesData = {{}};
                     Object.entries(seriesDict).forEach(([name, values]) => {{
                         seriesData[name] = values ? values.filter((_, i) => mask[i]) : values;
@@ -800,7 +937,7 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
                     periodLabel = ` — Period: ${{selectedPeriod}}`;
                 }}
             }}
-            return {{ timeIndex, seriesData, periodLabel }};
+            return {{ timeIndex, timeStrings, seriesData, periodLabel }};
         }}
 
         function getComponentClass(componentType) {{
@@ -817,7 +954,8 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
             return available.length > 0 ? available : null;
         }}
 
-        // Keep entries of seriesData whose component matches the filters stored under stateKey
+        // Keep entries of seriesData whose component matches the filters stored under stateKey.
+        // Each filter holds a list of accepted values; an empty list means All.
         function applyAttributeFilters(stateKey, componentType, filterCfg, seriesData) {{
             const selected = activeFilters[stateKey] || {{}};
             const staticData = networkData.components[componentType].static;
@@ -825,55 +963,131 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
             Object.entries(seriesData).forEach(([name, values]) => {{
                 const keep = filterCfg.every(f => {{
                     const wanted = selected[f.attr];
-                    if (wanted === undefined || wanted === '__all__') return true;
-                    return staticData[f.attr][name] === wanted;
+                    if (!wanted || wanted.length === 0) return true;
+                    return wanted.includes(staticData[f.attr][name]);
                 }});
                 if (keep) result[name] = values;
             }});
             return result;
         }}
 
-        // Filter bar markup shared by the component tabs and the Load vs Generation view.
-        // opts: id (required), title, noun (default 'series'), extraHtml
-        function renderFilterBar(stateKey, componentType, filterCfg, totalCount, shownCount, opts) {{
-            const selected = activeFilters[stateKey] || {{}};
+        // Attach the selectable values to each filter, cascading in filterCfg order: a filter only offers
+        // values found among the components (from names) that match the filters before it, e.g. Type only
+        // lists the types of the selected carrier(s). Selections that are no longer offered are dropped.
+        // Call before applyAttributeFilters so the dropped selections are not applied.
+        function cascadeFilterValues(stateKey, componentType, filterCfg, names) {{
             const staticData = networkData.components[componentType].static;
-            const note = FILTER_NOTES[getComponentClass(componentType)];
+            const selected = activeFilters[stateKey] || {{}};
+            let pool = names;
+            return filterCfg.map(f => {{
+                const col = staticData[f.attr];
+                const values = [...new Set(pool.map(n => col[n]).filter(v => v !== undefined))].sort();
+                if (selected[f.attr]) {{
+                    selected[f.attr] = selected[f.attr].filter(v => values.includes(v));
+                    if (selected[f.attr].length) {{
+                        const keep = new Set(selected[f.attr]);
+                        pool = pool.filter(n => keep.has(col[n]));
+                    }}
+                }}
+                return {{ ...f, values }};
+            }});
+        }}
 
+        // Checkbox dropdown allowing several values to be selected at once
+        function renderMultiSelect(stateKey, f, chosen) {{
+            const id = stateKey + '|' + f.attr;
+            const search = multiSelectSearch[id] || '';
+            const display = v => v === '' ? '(none)' : v;
+            const summary = chosen.length === 0 ? 'All'
+                : chosen.length <= 2 ? chosen.map(display).join(', ')
+                : `${{chosen.length}} selected`;
+            const options = f.values.map(v => {{
+                const hidden = search && !display(v).toLowerCase().includes(search.toLowerCase());
+                // Carrier options show the carrier's colour
+                const swatch = f.attr === 'carrier' && v !== ''
+                    ? `<span class="swatch-inline" style="background:${{escapeHtml(carrierColor(v))}}"></span>` : '';
+                return `<label class="multi-select-option"${{hidden ? ' style="display:none"' : ''}}>
+                    <input type="checkbox" value="${{escapeHtml(v)}}" ${{chosen.includes(v) ? 'checked' : ''}}> ${{swatch}}${{escapeHtml(display(v))}}</label>`;
+            }}).join('');
+            return `<div class="control-group">
+                <label class="control-label">${{escapeHtml(f.label)}}</label>
+                <div class="multi-select${{openMultiSelect === id ? ' open' : ''}}" data-filter-attr="${{escapeHtml(f.attr)}}">
+                    <button type="button" class="multi-select-toggle" title="${{escapeHtml(summary)}}">
+                        <span class="multi-select-summary">${{escapeHtml(summary)}}</span><span>▾</span>
+                    </button>
+                    <div class="multi-select-menu">
+                        ${{f.values.length > 8 ? `<input type="text" class="multi-select-search" placeholder="Search..." value="${{escapeHtml(search)}}">` : ''}}
+                        <button type="button" class="link-btn" data-action="clear">Clear (show all)</button>
+                        <div class="multi-select-options">${{options}}</div>
+                    </div>
+                </div>
+            </div>`;
+        }}
+
+        // Filter bar markup shared by the component tabs and the Power Balance view.
+        // filterCfg entries carry their selectable values (see cascadeFilterValues).
+        // opts: id (required), title, noun (default 'series'), extraHtml, note
+        function renderFilterBar(stateKey, filterCfg, totalCount, shownCount, opts) {{
+            const selected = activeFilters[stateKey] || {{}};
             let html = `<div class="filter-bar" id="${{opts.id}}">`;
             if (opts.title) {{
                 html += `<div class="filter-title">${{escapeHtml(opts.title)}}</div>`;
             }}
-            filterCfg.forEach(f => {{
-                const values = [...new Set(Object.values(staticData[f.attr]))].sort();
-                const current = selected[f.attr] ?? '__all__';
-                html += `<div class="control-group">
-                    <label class="control-label">${{escapeHtml(f.label)}}</label>
-                    <select data-filter-attr="${{escapeHtml(f.attr)}}">
-                        <option value="__all__">All</option>
-                        ${{values.map(v => `<option value="${{escapeHtml(v)}}" ${{v === current ? 'selected' : ''}}>${{v === '' ? '(none)' : escapeHtml(v)}}</option>`).join('')}}
-                    </select>
-                </div>`;
-            }});
+            filterCfg.forEach(f => {{ html += renderMultiSelect(stateKey, f, selected[f.attr] || []); }});
             html += `<div class="control-group"><button type="button" class="reset-filters">Reset Filters</button></div>
                 ${{opts.extraHtml || ''}}
                 <div class="filter-count">Showing ${{shownCount}} of ${{totalCount}} ${{opts.noun || 'series'}}</div>`;
-            if (note) {{
-                html += `<div style="flex-basis:100%;color:#7f8c8d;font-size:0.9em;">${{note}}</div>`;
+            if (opts.note) {{
+                html += `<div class="filter-note">${{opts.note}}</div>`;
             }}
             return html + '</div>';
         }}
 
-        function bindFilterBar(root, stateKey, rerender) {{
-            root.querySelectorAll('select[data-filter-attr]').forEach(sel => {{
-                sel.addEventListener('change', function() {{
+        function closeMultiSelects() {{
+            openMultiSelect = null;
+            document.querySelectorAll('.multi-select.open').forEach(m => m.classList.remove('open'));
+        }}
+        document.addEventListener('click', e => {{
+            if (!e.target.closest('.multi-select')) closeMultiSelects();
+        }});
+
+        // onReset (optional) runs when Reset Filters is pressed, before re-rendering
+        function bindFilterBar(root, stateKey, rerender, onReset) {{
+            root.querySelectorAll('.multi-select').forEach(ms => {{
+                const attr = ms.dataset.filterAttr;
+                const id = stateKey + '|' + attr;
+                ms.querySelector('.multi-select-toggle').addEventListener('click', () => {{
+                    const willOpen = !ms.classList.contains('open');
+                    closeMultiSelects();
+                    if (willOpen) {{
+                        ms.classList.add('open');
+                        openMultiSelect = id;
+                        const search = ms.querySelector('.multi-select-search');
+                        if (search) search.focus();
+                    }}
+                }});
+                ms.querySelectorAll('input[type=checkbox]').forEach(cb => cb.addEventListener('change', () => {{
                     activeFilters[stateKey] = activeFilters[stateKey] || {{}};
-                    activeFilters[stateKey][this.dataset.filterAttr] = this.value;
+                    activeFilters[stateKey][attr] = [...ms.querySelectorAll('input[type=checkbox]:checked')].map(c => c.value);
                     rerender();
+                }}));
+                ms.querySelector('[data-action=clear]').addEventListener('click', () => {{
+                    if (activeFilters[stateKey]) delete activeFilters[stateKey][attr];
+                    rerender();
+                }});
+                const search = ms.querySelector('.multi-select-search');
+                if (search) search.addEventListener('input', () => {{
+                    multiSelectSearch[id] = search.value;
+                    const q = search.value.toLowerCase();
+                    ms.querySelectorAll('.multi-select-option').forEach(o => {{
+                        o.style.display = o.textContent.toLowerCase().includes(q) ? '' : 'none';
+                    }});
                 }});
             }});
             root.querySelector('.reset-filters').addEventListener('click', () => {{
                 delete activeFilters[stateKey];
+                closeMultiSelects();
+                if (onReset) onReset();
                 rerender();
             }});
         }}
@@ -916,11 +1130,49 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
             ).join('');
         }}
 
-        function splitButton(key, label) {{
-            return `<div class="control-group"><button type="button" class="toggle-btn${{balanceState[key] ? ' active' : ''}}" data-split="${{key}}">${{label}}</button></div>`;
+        // On/off button bound to a boolean in balanceState
+        function flagButton(key, label) {{
+            return `<div class="control-group"><button type="button" class="toggle-btn${{balanceState[key] ? ' active' : ''}}" data-flag="${{key}}">${{label}}</button></div>`;
         }}
 
-        // Build the Load vs Generation skeleton; controls and plot are filled by refreshBalance()
+        // Net power flowing into the given (non-hydro) nodes through links, from the nodes' perspective:
+        // into the node is positive, out of the node is negative. Links touching a hydro bus are reported
+        // separately as hydro storage (discharge +, charging -).
+        // Returns per-line flows ('kind|bus' keys, split by bus if requested) and the unsplit totals.
+        function computeImports(balance, length, nodes, split) {{
+            const info = balance.links;
+            const hydro = new Set(balance.hydro_buses);
+            const linkStatic = networkData.components[info.component].static;
+            const busAttrs = Object.keys(linkStatic).filter(a => /^bus\\d+$/.test(a));
+            const isHydroLink = name => busAttrs.some(a => hydro.has(linkStatic[a][name]));
+
+            const flows = {{}};
+            const totals = {{ other: new Array(length).fill(0), hydro: new Array(length).fill(0) }};
+            const connected = new Set();
+            info.ports.forEach(port => {{
+                const series = resolveBalanceSeries(port);
+                port.names.forEach(name => {{
+                    const bus = linkStatic[port.bus_attr][name];
+                    const values = series[name];
+                    if (!nodes.has(bus) || !values) return;
+                    connected.add(name);
+                    const kind = isHydroLink(name) ? 'hydro' : 'other';
+                    const key = kind + '|' + (split ? bus : '');
+                    const acc = flows[key] = flows[key] || new Array(length).fill(0);
+                    const total = totals[kind];
+                    // p_i is power withdrawn from bus_i by the link, so the injection into the bus is -p_i
+                    for (let i = 0; i < length; i++) {{
+                        const v = values[i] || 0;
+                        acc[i] -= v;
+                        total[i] -= v;
+                    }}
+                }});
+            }});
+            const totalLinks = info.ports.length ? info.ports[0].names.length : 0;
+            return {{ flows, totals, connected: connected.size, totalLinks }};
+        }}
+
+        // Build the Power Balance skeleton; controls and plot are filled by refreshBalance()
         function displayLoadGeneration() {{
             const contentDiv = document.getElementById('contentDisplay');
 
@@ -942,24 +1194,19 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
             const state = balanceState;
             const scale = BALANCE_UNITS[state.unit];
             const length = balance.time_index.length;
+            const hasImports = !!(balance.links && balance.links.ports.length);
+            const available = {{
+                load: !!balance.loads, generation: !!balance.generators,
+                imports: hasImports, storage: !!balance.storage,
+                mismatch: !!balance.loads && !!balance.generators
+            }};
+            const isOn = key => available[key] && state.visible[key];
 
-            // --- Loads: filter, then total or split by bus
-            const loadSeries = resolveBalanceSeries(balance.loads);
-            const loadCfg = balance.loads ? getFilterConfig(balance.loads.component) : null;
-            let loadNames = balance.loads ? balance.loads.names : [];
-            if (loadCfg) {{
-                const byName = Object.fromEntries(loadNames.map(n => [n, true]));
-                loadNames = Object.keys(applyAttributeFilters(BALANCE_LOAD_FILTERS, balance.loads.component, loadCfg, byName));
-            }}
-
-            // --- Generators: same filters as the Generators tab
-            const genSeries = resolveBalanceSeries(balance.generators);
-            const genCfg = balance.generators ? getFilterConfig(balance.generators.component) : null;
-            let genNames = balance.generators ? balance.generators.names : [];
-            if (genCfg) {{
-                const byName = Object.fromEntries(genNames.map(n => [n, true]));
-                genNames = Object.keys(applyAttributeFilters(BALANCE_GEN_FILTERS, balance.generators.component, genCfg, byName));
-            }}
+            // --- Shared node picker: every plot is restricted to the selected nodes (All = every non-hydro bus)
+            const hydro = new Set(balance.hydro_buses);
+            const nodeOptions = balance.buses.filter(b => !hydro.has(b)).sort();
+            const pickedNodes = (activeFilters[BALANCE_NODE_FILTERS] || {{}}).bus || [];
+            const nodes = new Set(pickedNodes.length ? pickedNodes : nodeOptions);
 
             const attrOf = (entry, attr, fallback) => {{
                 const col = entry && networkData.components[entry.component].static[attr];
@@ -968,127 +1215,206 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
                     return v === undefined || v === '' ? fallback : v;
                 }};
             }};
+            const atNodes = entry => {{
+                const bus = attrOf(entry, 'bus', null);
+                return entry.names.filter(n => nodes.has(bus(n)));
+            }};
+
+            // --- Loads at the selected nodes
+            const loadSeries = resolveBalanceSeries(balance.loads);
+            const loadNames = balance.loads ? atNodes(balance.loads) : [];
             const loadBus = attrOf(balance.loads, 'bus', '(no bus)');
+
+            // --- Generators at the selected nodes, then the carrier / type filters of the Generators tab
+            const genSeries = resolveBalanceSeries(balance.generators);
+            const genNodeNames = balance.generators ? atNodes(balance.generators) : [];
+            const genCfg = balance.generators
+                ? (getFilterConfig(balance.generators.component) || []).filter(f => f.attr !== 'bus') : [];
+            let genNames = genNodeNames;
+            let genFilterValues = [];
+            if (genCfg.length) {{
+                // Options only cover generators at the selected nodes, cascading Carrier -> Type
+                genFilterValues = cascadeFilterValues(BALANCE_GEN_FILTERS, balance.generators.component, genCfg, genNodeNames);
+                const byName = Object.fromEntries(genNodeNames.map(n => [n, true]));
+                genNames = Object.keys(applyAttributeFilters(BALANCE_GEN_FILTERS, balance.generators.component, genCfg, byName));
+            }}
             const genBus = attrOf(balance.generators, 'bus', '(no bus)');
             const genCarrier = attrOf(balance.generators, 'carrier', '(no carrier)');
 
-            // Aggregate on the full time axis, then restrict to the selected period
-            const raw = {{}};
-            if (loadSeries) {{
+            // --- Storage units and stores at the selected nodes
+            let storageTotal = null;
+            if (balance.storage) {{
+                storageTotal = new Array(length).fill(0);
+                balance.storage.forEach(entry => {{
+                    const s = sumSeries(atNodes(entry), resolveBalanceSeries(entry), length);
+                    for (let i = 0; i < length; i++) storageTotal[i] += s[i];
+                }});
+            }}
+
+            const imports = hasImports ? computeImports(balance, length, nodes, state.importSplit) : null;
+
+            // Aggregate on the full time axis (only for plots that are switched on), then restrict to the selected period
+            const raw = {{}}, meta = {{}};
+            const add = (key, values, m) => {{ raw[key] = values; meta[key] = m; }};
+            if (isOn('generation') && state.showCarriers) {{
+                Object.entries(groupSeries(genNames, genSeries, genCarrier, length))
+                    .forEach(([carrier, v]) => add('carrier|' + carrier, v, {{ group: 'carrier', label: carrier }}));
+            }}
+            if (isOn('load')) {{
                 if (state.loadSplit) {{
                     Object.entries(groupSeries(loadNames, loadSeries, loadBus, length))
-                        .forEach(([bus, v]) => {{ raw['load|' + bus] = v; }});
+                        .forEach(([bus, v]) => add('load|' + bus, v, {{ group: 'load', bus }}));
                 }} else {{
-                    raw['load|'] = sumSeries(loadNames, loadSeries, length);
+                    add('load|', sumSeries(loadNames, loadSeries, length), {{ group: 'load' }});
                 }}
             }}
-            if (genSeries) {{
+            if (isOn('generation')) {{
                 if (state.genSplit) {{
                     Object.entries(groupSeries(genNames, genSeries, genBus, length))
-                        .forEach(([bus, v]) => {{ raw['generation|' + bus] = v; }});
+                        .forEach(([bus, v]) => add('generation|' + bus, v, {{ group: 'generation', bus }}));
                 }} else {{
-                    raw['generation|'] = sumSeries(genNames, genSeries, length);
+                    add('generation|', sumSeries(genNames, genSeries, length), {{ group: 'generation' }});
                 }}
-                Object.entries(groupSeries(genNames, genSeries, genCarrier, length))
-                    .forEach(([carrier, v]) => {{ raw['carriers|' + carrier] = v; }});
             }}
-            if (balance.storage) raw['storage|'] = balance.storage;
-            const {{ timeIndex, seriesData, periodLabel }} = applyPeriodFilter(balance.time_index, raw);
+            if (isOn('imports')) {{
+                Object.keys(imports.flows).sort().forEach(key => {{
+                    const [kind, ...bus] = key.split('|');
+                    add('imports|' + key, imports.flows[key], {{ group: 'imports', kind, bus: bus.join('|') || undefined }});
+                }});
+            }}
+            if (isOn('storage')) add('storage|', storageTotal, {{ group: 'storage' }});
+            if (isOn('mismatch')) {{
+                // Uses every generator at the selected nodes (carrier / type filters would distort the check)
+                const load = sumSeries(loadNames, loadSeries, length);
+                const gen = sumSeries(genNodeNames, genSeries, length);
+                const mismatch = load.map((l, i) => l - gen[i]
+                    - (imports ? imports.totals.other[i] + imports.totals.hydro[i] : 0)
+                    - (storageTotal ? storageTotal[i] : 0));
+                add('mismatch|', mismatch, {{ group: 'mismatch' }});
+            }}
+            const {{ timeIndex, timeStrings, seriesData, periodLabel }} = applyPeriodFilter(balance.time_index, raw);
 
-            // Consistent colour per bus across load and generation lines
-            const allBuses = [...new Set(Object.keys(raw)
-                .filter(k => k.startsWith('load|') || k.startsWith('generation|'))
-                .map(k => k.split('|').slice(1).join('|')))].sort();
+            // Consistent colour per bus across split load / generation / import lines
+            const allBuses = [...new Set(Object.values(meta).map(m => m.bus).filter(b => b !== undefined))].sort();
             const busColor = bus => BUS_COLORS[allBuses.indexOf(bus) % BUS_COLORS.length];
 
             const stacked = state.carrierMode === 'stacked';
             const filled = state.stackStyle === 'filled';
+            // Object key order follows insertion, so carrier areas are drawn first and lines stay on top
             const traces = Object.entries(seriesData).map(([key, values]) => {{
-                const [group, ...rest] = key.split('|');
-                const label = rest.join('|');
-                const t = {{ group, x: timeIndex, y: values.map(v => v * scale), type: 'scatter', mode: 'lines',
-                    visible: state.visible[group] }};
-                if (group === 'load') {{
-                    Object.assign(t, label
-                        ? {{ name: `Load – ${{label}}`, legendgroup: label, line: {{ width: 2, dash: 'dot', color: busColor(label) }} }}
+                const m = meta[key];
+                const t = {{ x: timeIndex, y: values.map(v => v * scale), type: 'scatter', mode: 'lines' }};
+                if (m.bus !== undefined) t.legendgroup = m.bus;
+                if (m.group === 'load') {{
+                    Object.assign(t, m.bus !== undefined
+                        ? {{ name: `Load – ${{m.bus}}`, line: {{ width: 2, dash: 'dot', color: busColor(m.bus) }} }}
                         : {{ name: balance.load_source === 'p' ? 'Load' : 'Load (p_set)', line: {{ width: 3, color: '#c0392b' }} }});
-                }} else if (group === 'generation') {{
-                    Object.assign(t, label
-                        ? {{ name: `Generation – ${{label}}`, legendgroup: label, line: {{ width: 2, color: busColor(label) }} }}
+                }} else if (m.group === 'generation') {{
+                    Object.assign(t, m.bus !== undefined
+                        ? {{ name: `Generation – ${{m.bus}}`, line: {{ width: 2, color: busColor(m.bus) }} }}
                         : {{ name: 'Generation', line: {{ width: 3, color: '#27ae60' }} }});
-                }} else if (group === 'carriers') {{
-                    t.name = label;
-                    t.line = {{ width: stacked && filled ? 0.5 : 2 }};
-                    if (balance.carrier_colors[label]) t.line.color = balance.carrier_colors[label];
+                }} else if (m.group === 'carrier') {{
+                    const color = carrierColor(m.label);
+                    t.name = m.label;
+                    t.line = {{ width: stacked && filled ? 0.5 : 2, color }};
                     if (stacked) {{
                         t.stackgroup = 'carriers';
                         if (filled) {{
-                            if (t.line.color) t.fillcolor = t.line.color;
+                            t.fillcolor = color;
                         }} else {{
                             t.fill = 'none';
                         }}
                     }}
-                }} else if (group === 'storage') {{
-                    Object.assign(t, {{ name: 'Storage Units (net)', line: {{ width: 2, dash: 'dash', color: '#8e44ad' }} }});
+                }} else if (m.group === 'imports') {{
+                    const base = m.kind === 'hydro' ? 'Hydro storage (net)' : 'Imports (net)';
+                    Object.assign(t, m.bus !== undefined
+                        ? {{ name: `${{base}} – ${{m.bus}}`, line: {{ width: 2, dash: m.kind === 'hydro' ? 'longdash' : 'dashdot', color: busColor(m.bus) }} }}
+                        : {{ name: base, line: m.kind === 'hydro'
+                            ? {{ width: 2.5, dash: 'dash', color: HYDRO_COLOR }}
+                            : {{ width: 2.5, color: '#2980b9' }} }});
+                }} else if (m.group === 'storage') {{
+                    Object.assign(t, {{ name: 'Storage (net)', line: {{ width: 2, dash: 'dash', color: '#8e44ad' }} }});
+                }} else if (m.group === 'mismatch') {{
+                    Object.assign(t, {{ name: 'Mismatch', line: {{ width: 2, dash: 'dot', color: '#2c3e50' }} }});
                 }}
                 return t;
             }});
-            // Draw the carrier breakdown first so load/generation lines stay on top of filled areas
-            traces.sort((a, b) => (b.group === 'carriers') - (a.group === 'carriers'));
-            const availableGroups = new Set(traces.map(t => t.group));
+            balanceExport = {{ timeStrings, unit: state.unit, periodLabel, columns: traces.map(t => ({{ name: t.name, values: t.y }})) }};
 
             // --- Info panel
             const notes = [];
             if (balance.load_source === 'p_set') notes.push('Load shows the p_set input (network has no optimised load results).');
             if (!balance.generators) notes.push('Generation dispatch is unavailable — optimise the network to see generation.');
             document.getElementById('balanceInfo').innerHTML = `
-                <h3>Load vs Generation${{periodLabel}}</h3>
-                <p>Use the buttons below to show or hide each plot. Switching a plot on opens its filters and display options.</p>
+                <h3>Power Balance${{periodLabel}}</h3>
+                <p>1. Pick the node(s) to analyse &nbsp;·&nbsp; 2. Switch plots on or off (switching a plot on opens its options) &nbsp;·&nbsp;
+                   3. Hover over a button for an explanation.</p>
                 ${{notes.map(n => `<p><em>${{n}}</em></p>`).join('')}}`;
 
-            // --- Controls: each plot button opens its own options panel while it is switched on
-            const isOn = key => availableGroups.has(key) && state.visible[key];
+            // --- Controls
+            const nodeBar = renderFilterBar(BALANCE_NODE_FILTERS,
+                [{{ attr: 'bus', label: 'Node(s)', values: nodeOptions }}], nodeOptions.length, nodes.size,
+                {{ id: 'balanceNodeFilters', title: 'Nodes', noun: 'nodes',
+                   note: 'Applies to every plot below. Hydro buses (' + balance.hydro_suffixes.join(', ') + ') are not listed: ' +
+                         'their contribution appears as <em>Hydro storage (net)</em> under Imports.' }});
+
+            // Each plot button opens its own options panel while it is switched on
             const panels = {{}};
-            if (loadCfg) {{
-                panels.load = renderFilterBar(BALANCE_LOAD_FILTERS, balance.loads.component, loadCfg,
-                    balance.loads.names.length, loadNames.length,
-                    {{ id: 'balanceLoadFilters', title: 'Load filters', noun: 'loads', extraHtml: splitButton('loadSplit', 'Split by Bus') }});
+            if (balance.loads) {{
+                panels.load = `<div class="filter-bar" id="balanceLoadOptions">
+                    <div class="filter-title">Load options</div>
+                    ${{flagButton('loadSplit', 'Split by Bus')}}
+                    <div class="filter-count">Showing ${{loadNames.length}} of ${{balance.loads.names.length}} loads</div>
+                </div>`;
             }}
-            if (genCfg) {{
-                panels.generation = renderFilterBar(BALANCE_GEN_FILTERS, balance.generators.component, genCfg,
-                    balance.generators.names.length, genNames.length,
-                    {{ id: 'balanceGenFilters', title: 'Generation filters', noun: 'generators', extraHtml: splitButton('genSplit', 'Split by Bus') }});
+            if (balance.generators) {{
+                const carriersOff = !state.showCarriers;
+                const genOptions = {{ id: 'balanceGenFilters', title: 'Generation filters', noun: 'generators',
+                    extraHtml: flagButton('genSplit', 'Split by Bus') }};
+                panels.generation = (genCfg.length
+                    ? renderFilterBar(BALANCE_GEN_FILTERS, genFilterValues,
+                        balance.generators.names.length, genNames.length, genOptions)
+                    : `<div class="filter-bar" id="balanceGenFilters"><div class="filter-title">Generation filters</div>${{genOptions.extraHtml}}</div>`)
+                    + `<div class="filter-bar" id="balanceGenDisplay">
+                        <div class="filter-title">Generation Display Options</div>
+                        ${{flagButton('showCarriers', 'Show Carrier Breakdown')}}
+                        <div class="control-group">
+                            <label class="control-label">Carrier Breakdown</label>
+                            <div class="button-group">${{optionButtons('carrierMode', [['lines', 'Lines'], ['stacked', 'Stacked']], state.carrierMode, carriersOff)}}</div>
+                        </div>
+                        <div class="control-group">
+                            <label class="control-label">Stacked Style</label>
+                            <div class="button-group">${{optionButtons('stackStyle', [['filled', 'Filled'], ['line', 'Line Only']], state.stackStyle, carriersOff || !stacked)}}</div>
+                        </div>
+                    </div>`;
             }}
-            if (availableGroups.has('carriers')) {{
-                panels.carriers = `<div class="filter-bar" id="balanceCarrierOptions">
-                    <div class="filter-title">Generation by Carrier options</div>
-                    <div class="control-group">
-                        <label class="control-label">Generation by Carrier</label>
-                        <div class="button-group">${{optionButtons('carrierMode', [['lines', 'Lines'], ['stacked', 'Stacked']], state.carrierMode, false)}}</div>
-                    </div>
-                    <div class="control-group">
-                        <label class="control-label">Stacked Style</label>
-                        <div class="button-group">${{optionButtons('stackStyle', [['filled', 'Filled'], ['line', 'Line Only']], state.stackStyle, !stacked)}}</div>
-                    </div>
+            if (hasImports) {{
+                panels.imports = `<div class="filter-bar" id="balanceImportOptions">
+                    <div class="filter-title">Import options</div>
+                    ${{flagButton('importSplit', 'Split by Bus')}}
+                    <div class="filter-count">Showing ${{imports.connected}} of ${{imports.totalLinks}} links connected</div>
+                    <div class="filter-note">Power flowing <strong>into</strong> the selected node(s) is positive; power flowing <strong>out</strong> is negative.
+                        Links to hydro buses are shown separately as <em>Hydro storage (net)</em>: discharge is positive, charging is negative.
+                        Flows between two selected nodes cancel out.</div>
                 </div>`;
             }}
 
             const visibilityButtons = BALANCE_GROUPS.map(g => {{
-                const enabled = availableGroups.has(g.key);
                 const active = isOn(g.key);
                 const caret = panels[g.key] ? `<span class="caret">${{active ? '▾' : '▸'}}</span>` : '';
-                return `<button type="button" class="toggle-btn${{active ? ' active' : ''}}" data-group="${{g.key}}" ${{enabled ? '' : 'disabled'}}>
+                return `<button type="button" class="toggle-btn${{active ? ' active' : ''}}" data-group="${{g.key}}" title="${{escapeHtml(g.hint)}}" ${{available[g.key] ? '' : 'disabled'}}>
                     <span class="swatch" style="background:${{g.color}}"></span>${{g.label}}${{caret}}</button>`;
             }}).join('');
 
-            let controls = `<div class="toggle-bar">${{visibilityButtons}}</div>`;
+            let controls = nodeBar + `<div class="toggle-bar">${{visibilityButtons}}</div>`;
             BALANCE_GROUPS.forEach(g => {{
                 if (panels[g.key] && isOn(g.key)) {{
                     controls += `<div class="group-panel" style="border-left-color:${{g.color}}">${{panels[g.key]}}</div>`;
                 }}
             }});
-            // Unit selector: always available, right-aligned directly above the plot
+            // Download + unit selector: always available, right-aligned directly above the plot
             controls += `<div class="unit-bar">
+                <button type="button" class="toggle-btn" id="balanceDownload" title="Download the plotted series (current nodes, filters, period and unit) as CSV">⬇ Download CSV</button>
                 <label class="control-label">Unit</label>
                 <div class="button-group">${{optionButtons('unit', Object.keys(BALANCE_UNITS).map(u => [u, u]), state.unit, false)}}</div>
             </div>`;
@@ -1100,29 +1426,61 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
                 state.visible[this.dataset.group] = !state.visible[this.dataset.group];
                 refreshBalance();
             }}));
-            controlsDiv.querySelectorAll('[data-split]').forEach(btn => btn.addEventListener('click', function() {{
-                state[this.dataset.split] = !state[this.dataset.split];
+            controlsDiv.querySelectorAll('[data-flag]').forEach(btn => btn.addEventListener('click', function() {{
+                state[this.dataset.flag] = !state[this.dataset.flag];
                 refreshBalance();
             }}));
             controlsDiv.querySelectorAll('[data-option]').forEach(btn => btn.addEventListener('click', function() {{
                 state[this.dataset.option] = this.dataset.value;
                 refreshBalance();
             }}));
-            const loadBar = document.getElementById('balanceLoadFilters');
+            document.getElementById('balanceDownload').addEventListener('click', downloadBalanceCsv);
+            // Resetting the nodes switches off every Split by Bus; resetting generator filters switches off the generation split
+            bindFilterBar(document.getElementById('balanceNodeFilters'), BALANCE_NODE_FILTERS, refreshBalance, () => {{
+                state.loadSplit = state.genSplit = state.importSplit = false;
+            }});
             const genBar = document.getElementById('balanceGenFilters');
-            if (loadBar) bindFilterBar(loadBar, BALANCE_LOAD_FILTERS, refreshBalance);
-            if (genBar) bindFilterBar(genBar, BALANCE_GEN_FILTERS, refreshBalance);
+            if (genBar && genBar.querySelector('.reset-filters')) {{
+                bindFilterBar(genBar, BALANCE_GEN_FILTERS, refreshBalance, () => {{ state.genSplit = false; }});
+            }}
 
             // --- Plot (react keeps the x-axis zoom between updates; the y-axis resets when the unit changes)
             Plotly.react('balancePlot', traces, {{
-                title: `Load vs Generation${{periodLabel}}`,
+                title: `Power Balance${{periodLabel}}`,
                 xaxis: {{ title: 'Time', type: 'date', uirevision: 'balance' }},
-                yaxis: {{ title: state.unit, uirevision: state.unit }},
+                yaxis: {{ title: state.unit, uirevision: state.unit, zeroline: true, zerolinecolor: '#7f8c8d' }},
                 hovermode: 'x unified',
                 legend: {{ orientation: 'h', x: 0.5, xanchor: 'center', y: -0.2 }},
                 margin: {{ l: 80, r: 80, t: 80, b: 120 }},
                 uirevision: 'balance'
             }}, {{ responsive: true, displayModeBar: true, displaylogo: false }});
+        }}
+
+        // Save the series currently shown in the Power Balance plot as a CSV file
+        function downloadBalanceCsv() {{
+            if (!balanceExport || balanceExport.columns.length === 0) {{
+                alert('Nothing to download: switch at least one plot on.');
+                return;
+            }}
+            const csvCell = v => {{
+                const s = String(v);
+                return /[",\\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+            }};
+            const {{ timeStrings, unit, columns }} = balanceExport;
+            const header = ['snapshot', ...columns.map(c => `${{c.name}} [${{unit}}]`)];
+            const lines = [header.map(csvCell).join(',')];
+            timeStrings.forEach((t, i) => {{
+                lines.push([t, ...columns.map(c => c.values[i])].map(csvCell).join(','));
+            }});
+            const period = balanceExport.periodLabel.replace(/[^0-9A-Za-z]+/g, '_').replace(/^_|_$/g, '');
+            const blob = new Blob([lines.join('\\n')], {{ type: 'text/csv;charset=utf-8' }});
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = `power_balance${{period ? '_' + period : ''}}_${{unit}}.csv`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(a.href);
         }}
 
         function clearDisplay() {{
@@ -1285,8 +1643,9 @@ def _extract_component_info(network, currency='$', custom_plots=None):
                 'unit': unit
             }
 
-    # --- Load vs generation balance ------------------------------------------
+    # --- Power balance and carrier colours ------------------------------------
     component_info['balance'] = _extract_balance(network, snapshot_time_index)
+    component_info['carrier_colors'] = _extract_carrier_colors(network)
 
     component_info['summary']['snapshots'] = len(network.snapshots)
     component_info['summary']['is_multi_index'] = is_multi_index
@@ -1415,7 +1774,7 @@ def _component_series(comp_key, comp, attr, snapshots):
 def _extract_balance(network, time_index):
     """
     Build the per-component load and generation timeseries used by the
-    "Load vs Generation" view. Aggregation (totals, per bus, per carrier) is
+    "Power Balance" view. Aggregation (totals, per bus, per carrier) is
     done in the browser so it can follow the user's filters. Returns None if
     the network has no loads and no generators.
     """
@@ -1423,7 +1782,10 @@ def _extract_balance(network, time_index):
     comps = {getattr(c, 'name', k): (k, c) for k, c in network.components.items()}
     loads_key, loads = comps.get('Load', (None, None))
     gens_key, gens = comps.get('Generator', (None, None))
-    _, storage = comps.get('StorageUnit', (None, None))
+    storage_units = comps.get('StorageUnit', (None, None))
+    stores = comps.get('Store', (None, None))
+    links_key, links = comps.get('Link', (None, None))
+    _, buses = comps.get('Bus', (None, None))
 
     has_loads = loads is not None and not loads.static.empty
     has_gens = gens is not None and not gens.static.empty
@@ -1437,8 +1799,30 @@ def _extract_balance(network, time_index):
         'load_source': None,
         'generators': None,
         'storage': None,
-        'carrier_colors': {},
+        'links': None,
+        'buses': [],
+        'hydro_buses': [],
+        'hydro_suffixes': list(HYDRO_BUS_SUFFIXES),
     }
+
+    if buses is not None and not buses.static.empty:
+        suffixes = tuple(s.lower() for s in HYDRO_BUS_SUFFIXES)
+        balance['buses'] = [str(b) for b in buses.static.index]
+        balance['hydro_buses'] = [b for b in balance['buses'] if b.strip().lower().endswith(suffixes)]
+
+    # Link flows at every port (bus0, bus1, bus2, ...) for the Imports view
+    if links is not None and not links.static.empty and _has_results(links, 'p0'):
+        dynamic = dict(links.dynamic.items())
+        ports = []
+        i = 0
+        while f'bus{i}' in links.static.columns:
+            ts = dynamic.get(f'p{i}')
+            if ts is not None and not ts.empty:
+                entry = _component_series(links_key, links, f'p{i}', snapshots)
+                entry['bus_attr'] = f'bus{i}'
+                ports.append(entry)
+            i += 1
+        balance['links'] = {'component': links_key, 'ports': ports}
 
     if has_loads:
         # Optimised load 'p' if available, otherwise the p_set input
@@ -1449,17 +1833,31 @@ def _extract_balance(network, time_index):
     if has_gens and _has_results(gens):
         balance['generators'] = _component_series(gens_key, gens, 'p', snapshots)
 
-    if storage is not None and not storage.static.empty and _has_results(storage):
-        balance['storage'] = _dense_attribute(storage, 'p', snapshots).sum(axis=1).tolist()
-
-    _, carriers = comps.get('Carrier', (None, None))
-    if carriers is not None and 'color' in carriers.static.columns:
-        balance['carrier_colors'] = {
-            str(k): str(v) for k, v in carriers.static['color'].items()
-            if isinstance(v, str) and v
-        }
+    # Storage units and stores: p > 0 is discharge into the bus, p < 0 is charging
+    storage_entries = []
+    for key, comp in (storage_units, stores):
+        if comp is not None and not comp.static.empty and _has_results(comp):
+            storage_entries.append(_component_series(key, comp, 'p', snapshots))
+    balance['storage'] = storage_entries or None
 
     return balance
+
+
+def _extract_carrier_colors(network):
+    """Return {carrier: CSS colour} from the static ``color`` attribute of the carriers."""
+    carriers = next((c for c in network.components.values() if getattr(c, 'name', '') == 'Carrier'), None)
+    if carriers is None or carriers.static.empty or 'color' not in carriers.static.columns:
+        return {}
+    colors = {}
+    for carrier, color in carriers.static['color'].items():
+        if not isinstance(color, str) or not color.strip():
+            continue
+        color = color.strip()
+        # Accept hex colours written without the leading '#'
+        if re.fullmatch(r'[0-9a-fA-F]{6}|[0-9a-fA-F]{3}', color):
+            color = '#' + color
+        colors[str(carrier)] = color
+    return colors
 
 
 def _get_unit_for_attribute(attr, currency='$'):
