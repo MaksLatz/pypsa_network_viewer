@@ -337,9 +337,20 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
         }}
         .unit-bar {{
             display: flex;
-            justify-content: flex-end;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 10px;
+        }}
+        .unit-select {{
+            display: flex;
             align-items: center;
             gap: 10px;
+        }}
+        .instructions {{
+            margin: 0 0 5px 0;
+            padding-left: 22px;
+            line-height: 1.7;
         }}
         .unit-bar .control-label {{
             margin-bottom: 0;
@@ -556,15 +567,18 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
             {{ key: 'load', label: 'Load', color: '#c0392b',
                hint: 'Power consumed by the loads at the selected nodes.' }},
             {{ key: 'generation', label: 'Generation', color: '#27ae60',
-               hint: 'Power produced by the generators at the selected nodes. Opens generator filters and the carrier breakdown.' }},
+               hint: 'Power produced at the selected nodes by the generators plus Hydro Generation (net power from the hydro buses; pumping counts as negative). Opens generator filters and the carrier breakdown.' }},
             {{ key: 'imports', label: 'Imports', color: '#2980b9',
-               hint: 'Net power reaching the selected nodes through links (into the node +, out of the node −). Hydro storage links are shown separately.' }},
+               hint: 'Net power reaching the selected nodes through links (into the node +, out of the node −). Links to hydro buses are counted as Hydro Generation instead.' }},
             {{ key: 'storage', label: 'Storage (net)', color: '#8e44ad',
                hint: 'Storage units and stores at the selected nodes: discharge +, charging −.' }},
             {{ key: 'mismatch', label: 'Mismatch', color: '#2c3e50',
-               hint: 'Balance check: Load − (Generation + Imports + Hydro storage + Storage). Should be zero; anything else is power not captured by these plots (e.g. AC line flows).' }}
+               hint: 'Balance check: Load − (Generation + Imports + Storage), using every generator at the selected nodes. Should be zero; anything else is power not captured by these plots (e.g. AC line flows).' }}
         ];
         const HYDRO_COLOR = '#00acc1';
+        // Pseudo-carrier for power delivered by links from hydro buses; appears in the Carrier filter and breakdown
+        const HYDRO_CARRIER = 'Hydro Generation';
+        const HYDRO_PUMPING = 'Hydro Pumping';
         const BALANCE_UNITS = {{ kW: 1000, MW: 1, GW: 0.001 }};
         const balanceState = {{
             visible: {{ load: true, generation: true, imports: false, storage: false, mismatch: false }},
@@ -587,6 +601,7 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
         // Colour of a carrier: its static 'color' attribute, else a stable fallback from the palette
         function carrierColor(carrier) {{
             const colors = networkData.carrier_colors || {{}};
+            if (carrier === HYDRO_CARRIER || carrier === HYDRO_PUMPING) return colors.hydro || HYDRO_COLOR;
             if (colors[carrier]) return colors[carrier];
             let hash = 0;
             for (const ch of String(carrier)) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
@@ -975,13 +990,15 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
         // values found among the components (from names) that match the filters before it, e.g. Type only
         // lists the types of the selected carrier(s). Selections that are no longer offered are dropped.
         // Call before applyAttributeFilters so the dropped selections are not applied.
-        function cascadeFilterValues(stateKey, componentType, filterCfg, names) {{
+        // extraValues ({{ attr: [values] }}) adds options that are not component attributes (e.g. Hydro Generation).
+        function cascadeFilterValues(stateKey, componentType, filterCfg, names, extraValues = {{}}) {{
             const staticData = networkData.components[componentType].static;
             const selected = activeFilters[stateKey] || {{}};
             let pool = names;
             return filterCfg.map(f => {{
                 const col = staticData[f.attr];
-                const values = [...new Set(pool.map(n => col[n]).filter(v => v !== undefined))].sort();
+                const values = [...new Set([...pool.map(n => col[n]).filter(v => v !== undefined),
+                                            ...(extraValues[f.attr] || [])])].sort();
                 if (selected[f.attr]) {{
                     selected[f.attr] = selected[f.attr].filter(v => values.includes(v));
                     if (selected[f.attr].length) {{
@@ -1136,40 +1153,54 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
         }}
 
         // Net power flowing into the given (non-hydro) nodes through links, from the nodes' perspective:
-        // into the node is positive, out of the node is negative. Links touching a hydro bus are reported
-        // separately as hydro storage (discharge +, charging -).
-        // Returns per-line flows ('kind|bus' keys, split by bus if requested) and the unsplit totals.
+        // into the node is positive, out of the node is negative. Links touching a hydro bus are not imports:
+        // they are returned separately as Hydro Generation (discharge +, pumping -), which belongs to Generation.
+        // Returns import flows keyed by bus ('' unless split), the import total, and the hydro contribution.
         function computeImports(balance, length, nodes, split) {{
             const info = balance.links;
-            const hydro = new Set(balance.hydro_buses);
+            const hydroBuses = new Set(balance.hydro_buses);
             const linkStatic = networkData.components[info.component].static;
             const busAttrs = Object.keys(linkStatic).filter(a => /^bus\\d+$/.test(a));
-            const isHydroLink = name => busAttrs.some(a => hydro.has(linkStatic[a][name]));
+            const isHydroLink = name => busAttrs.some(a => hydroBuses.has(linkStatic[a][name]));
+            const zeros = () => new Array(length).fill(0);
 
             const flows = {{}};
-            const totals = {{ other: new Array(length).fill(0), hydro: new Array(length).fill(0) }};
-            const connected = new Set();
+            const total = zeros();
+            const hydro = {{ pos: zeros(), neg: zeros(), net: zeros(), byBus: {{}} }};
+            const connected = new Set(), hydroLinks = new Set();
+            let totalLinks = 0;
+            if (info.ports.length) {{
+                totalLinks = info.ports[0].names.filter(n => !isHydroLink(n)).length;
+            }}
             info.ports.forEach(port => {{
                 const series = resolveBalanceSeries(port);
                 port.names.forEach(name => {{
                     const bus = linkStatic[port.bus_attr][name];
                     const values = series[name];
                     if (!nodes.has(bus) || !values) return;
-                    connected.add(name);
-                    const kind = isHydroLink(name) ? 'hydro' : 'other';
-                    const key = kind + '|' + (split ? bus : '');
-                    const acc = flows[key] = flows[key] || new Array(length).fill(0);
-                    const total = totals[kind];
                     // p_i is power withdrawn from bus_i by the link, so the injection into the bus is -p_i
-                    for (let i = 0; i < length; i++) {{
-                        const v = values[i] || 0;
-                        acc[i] -= v;
-                        total[i] -= v;
+                    if (isHydroLink(name)) {{
+                        hydroLinks.add(name);
+                        const perBus = hydro.byBus[bus] = hydro.byBus[bus] || zeros();
+                        for (let i = 0; i < length; i++) {{
+                            const v = -(values[i] || 0);
+                            hydro.net[i] += v;
+                            perBus[i] += v;
+                            if (v >= 0) hydro.pos[i] += v; else hydro.neg[i] += v;
+                        }}
+                    }} else {{
+                        connected.add(name);
+                        const key = split ? bus : '';
+                        const acc = flows[key] = flows[key] || zeros();
+                        for (let i = 0; i < length; i++) {{
+                            const v = -(values[i] || 0);
+                            acc[i] += v;
+                            total[i] += v;
+                        }}
                     }}
                 }});
             }});
-            const totalLinks = info.ports.length ? info.ports[0].names.length : 0;
-            return {{ flows, totals, connected: connected.size, totalLinks }};
+            return {{ flows, total, hydro, hydroLinks: hydroLinks.size, connected: connected.size, totalLinks }};
         }}
 
         // Build the Power Balance skeleton; controls and plot are filled by refreshBalance()
@@ -1225,7 +1256,12 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
             const loadNames = balance.loads ? atNodes(balance.loads) : [];
             const loadBus = attrOf(balance.loads, 'bus', '(no bus)');
 
-            // --- Generators at the selected nodes, then the carrier / type filters of the Generators tab
+            // --- Link flows: imports, and Hydro Generation from links to hydro buses
+            const imports = hasImports ? computeImports(balance, length, nodes, state.importSplit) : null;
+            const hydroAtNodes = !!(imports && imports.hydroLinks);
+
+            // --- Generators at the selected nodes, then the carrier / type filters of the Generators tab.
+            // Hydro Generation is offered as an extra carrier and follows the same filters.
             const genSeries = resolveBalanceSeries(balance.generators);
             const genNodeNames = balance.generators ? atNodes(balance.generators) : [];
             const genCfg = balance.generators
@@ -1234,12 +1270,19 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
             let genFilterValues = [];
             if (genCfg.length) {{
                 // Options only cover generators at the selected nodes, cascading Carrier -> Type
-                genFilterValues = cascadeFilterValues(BALANCE_GEN_FILTERS, balance.generators.component, genCfg, genNodeNames);
+                genFilterValues = cascadeFilterValues(BALANCE_GEN_FILTERS, balance.generators.component, genCfg, genNodeNames,
+                    hydroAtNodes ? {{ carrier: [HYDRO_CARRIER] }} : {{}});
                 const byName = Object.fromEntries(genNodeNames.map(n => [n, true]));
                 genNames = Object.keys(applyAttributeFilters(BALANCE_GEN_FILTERS, balance.generators.component, genCfg, byName));
             }}
+            const genSelection = activeFilters[BALANCE_GEN_FILTERS] || {{}};
+            const pickedCarriers = genSelection.carrier || [];
+            const includeHydro = hydroAtNodes
+                && (pickedCarriers.length === 0 || pickedCarriers.includes(HYDRO_CARRIER))
+                && !(genSelection.type || []).length;  // hydro links have no generator type
             const genBus = attrOf(balance.generators, 'bus', '(no bus)');
             const genCarrier = attrOf(balance.generators, 'carrier', '(no carrier)');
+            const genTotal = names => genSeries ? sumSeries(names, genSeries, length) : new Array(length).fill(0);
 
             // --- Storage units and stores at the selected nodes
             let storageTotal = null;
@@ -1251,14 +1294,20 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
                 }});
             }}
 
-            const imports = hasImports ? computeImports(balance, length, nodes, state.importSplit) : null;
-
             // Aggregate on the full time axis (only for plots that are switched on), then restrict to the selected period
             const raw = {{}}, meta = {{}};
             const add = (key, values, m) => {{ raw[key] = values; meta[key] = m; }};
             if (isOn('generation') && state.showCarriers) {{
-                Object.entries(groupSeries(genNames, genSeries, genCarrier, length))
-                    .forEach(([carrier, v]) => add('carrier|' + carrier, v, {{ group: 'carrier', label: carrier }}));
+                if (genSeries) {{
+                    Object.entries(groupSeries(genNames, genSeries, genCarrier, length))
+                        .forEach(([carrier, v]) => add('carrier|' + carrier, v, {{ group: 'carrier', label: carrier }}));
+                }}
+                if (includeHydro) {{
+                    add('carrier|' + HYDRO_CARRIER, imports.hydro.pos, {{ group: 'carrier', label: HYDRO_CARRIER }});
+                    if (imports.hydro.neg.some(v => v < 0)) {{
+                        add('carrier|' + HYDRO_PUMPING, imports.hydro.neg, {{ group: 'carrier', label: HYDRO_PUMPING, negative: true }});
+                    }}
+                }}
             }}
             if (isOn('load')) {{
                 if (state.loadSplit) {{
@@ -1270,25 +1319,33 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
             }}
             if (isOn('generation')) {{
                 if (state.genSplit) {{
-                    Object.entries(groupSeries(genNames, genSeries, genBus, length))
-                        .forEach(([bus, v]) => add('generation|' + bus, v, {{ group: 'generation', bus }}));
+                    const byBus = genSeries ? groupSeries(genNames, genSeries, genBus, length) : {{}};
+                    if (includeHydro) {{
+                        Object.entries(imports.hydro.byBus).forEach(([bus, v]) => {{
+                            const acc = byBus[bus] = byBus[bus] || new Array(length).fill(0);
+                            for (let i = 0; i < length; i++) acc[i] += v[i];
+                        }});
+                    }}
+                    Object.keys(byBus).sort()
+                        .forEach(bus => add('generation|' + bus, byBus[bus], {{ group: 'generation', bus }}));
                 }} else {{
-                    add('generation|', sumSeries(genNames, genSeries, length), {{ group: 'generation' }});
+                    const total = genTotal(genNames);
+                    if (includeHydro) imports.hydro.net.forEach((v, i) => {{ total[i] += v; }});
+                    add('generation|', total, {{ group: 'generation' }});
                 }}
             }}
             if (isOn('imports')) {{
-                Object.keys(imports.flows).sort().forEach(key => {{
-                    const [kind, ...bus] = key.split('|');
-                    add('imports|' + key, imports.flows[key], {{ group: 'imports', kind, bus: bus.join('|') || undefined }});
+                Object.keys(imports.flows).sort().forEach(bus => {{
+                    add('imports|' + bus, imports.flows[bus], {{ group: 'imports', bus: bus || undefined }});
                 }});
             }}
             if (isOn('storage')) add('storage|', storageTotal, {{ group: 'storage' }});
             if (isOn('mismatch')) {{
-                // Uses every generator at the selected nodes (carrier / type filters would distort the check)
+                // Uses every generator and all hydro at the selected nodes (carrier / type filters would distort the check)
                 const load = sumSeries(loadNames, loadSeries, length);
-                const gen = sumSeries(genNodeNames, genSeries, length);
+                const gen = genTotal(genNodeNames);
                 const mismatch = load.map((l, i) => l - gen[i]
-                    - (imports ? imports.totals.other[i] + imports.totals.hydro[i] : 0)
+                    - (imports ? imports.total[i] + imports.hydro.net[i] : 0)
                     - (storageTotal ? storageTotal[i] : 0));
                 add('mismatch|', mismatch, {{ group: 'mismatch' }});
             }}
@@ -1317,8 +1374,10 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
                     const color = carrierColor(m.label);
                     t.name = m.label;
                     t.line = {{ width: stacked && filled ? 0.5 : 2, color }};
+                    if (m.negative) t.opacity = 0.6;  // Hydro Pumping: same colour, lighter
                     if (stacked) {{
-                        t.stackgroup = 'carriers';
+                        // Negative contributions (pumping) stack downwards from zero in their own group
+                        t.stackgroup = m.negative ? 'carriers-negative' : 'carriers';
                         if (filled) {{
                             t.fillcolor = color;
                         }} else {{
@@ -1326,12 +1385,9 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
                         }}
                     }}
                 }} else if (m.group === 'imports') {{
-                    const base = m.kind === 'hydro' ? 'Hydro storage (net)' : 'Imports (net)';
                     Object.assign(t, m.bus !== undefined
-                        ? {{ name: `${{base}} – ${{m.bus}}`, line: {{ width: 2, dash: m.kind === 'hydro' ? 'longdash' : 'dashdot', color: busColor(m.bus) }} }}
-                        : {{ name: base, line: m.kind === 'hydro'
-                            ? {{ width: 2.5, dash: 'dash', color: HYDRO_COLOR }}
-                            : {{ width: 2.5, color: '#2980b9' }} }});
+                        ? {{ name: `Imports (net) – ${{m.bus}}`, line: {{ width: 2, dash: 'dashdot', color: busColor(m.bus) }} }}
+                        : {{ name: 'Imports (net)', line: {{ width: 2.5, color: '#2980b9' }} }});
                 }} else if (m.group === 'storage') {{
                     Object.assign(t, {{ name: 'Storage (net)', line: {{ width: 2, dash: 'dash', color: '#8e44ad' }} }});
                 }} else if (m.group === 'mismatch') {{
@@ -1346,9 +1402,13 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
             if (balance.load_source === 'p_set') notes.push('Load shows the p_set input (network has no optimised load results).');
             if (!balance.generators) notes.push('Generation dispatch is unavailable — optimise the network to see generation.');
             document.getElementById('balanceInfo').innerHTML = `
-                <h3>Power Balance${{periodLabel}}</h3>
-                <p>1. Pick the node(s) to analyse &nbsp;·&nbsp; 2. Switch plots on or off (switching a plot on opens its options) &nbsp;·&nbsp;
-                   3. Hover over a button for an explanation.</p>
+                <h3>Instructions${{periodLabel}}</h3>
+                <ol class="instructions">
+                    <li>Pick the node(s) to analyse in <strong>Nodes</strong> (All = the whole network).</li>
+                    <li>Switch plots on or off with the coloured buttons. Switching a plot on opens its options.</li>
+                    <li>Hover over a button for an explanation of what it shows.</li>
+                    <li>Choose the unit, and use <strong>Download CSV</strong> to save what is plotted.</li>
+                </ol>
                 ${{notes.map(n => `<p><em>${{n}}</em></p>`).join('')}}`;
 
             // --- Controls
@@ -1356,7 +1416,7 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
                 [{{ attr: 'bus', label: 'Node(s)', values: nodeOptions }}], nodeOptions.length, nodes.size,
                 {{ id: 'balanceNodeFilters', title: 'Nodes', noun: 'nodes',
                    note: 'Applies to every plot below. Hydro buses (' + balance.hydro_suffixes.join(', ') + ') are not listed: ' +
-                         'their contribution appears as <em>Hydro storage (net)</em> under Imports.' }});
+                         'their contribution appears as <em>Hydro Generation</em> under Generation.' }});
 
             // Each plot button opens its own options panel while it is switched on
             const panels = {{}};
@@ -1394,8 +1454,8 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
                     ${{flagButton('importSplit', 'Split by Bus')}}
                     <div class="filter-count">Showing ${{imports.connected}} of ${{imports.totalLinks}} links connected</div>
                     <div class="filter-note">Power flowing <strong>into</strong> the selected node(s) is positive; power flowing <strong>out</strong> is negative.
-                        Links to hydro buses are shown separately as <em>Hydro storage (net)</em>: discharge is positive, charging is negative.
-                        Flows between two selected nodes cancel out.</div>
+                        Flows between two selected nodes cancel out. Links to hydro buses are not imports: they are counted under
+                        Generation as <em>Hydro Generation</em> (pumping as <em>Hydro Pumping</em>, negative).</div>
                 </div>`;
             }}
 
@@ -1412,11 +1472,13 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
                     controls += `<div class="group-panel" style="border-left-color:${{g.color}}">${{panels[g.key]}}</div>`;
                 }}
             }});
-            // Download + unit selector: always available, right-aligned directly above the plot
+            // Directly above the plot: Download on the left, unit selector on the right (both always available)
             controls += `<div class="unit-bar">
                 <button type="button" class="toggle-btn" id="balanceDownload" title="Download the plotted series (current nodes, filters, period and unit) as CSV">⬇ Download CSV</button>
-                <label class="control-label">Unit</label>
-                <div class="button-group">${{optionButtons('unit', Object.keys(BALANCE_UNITS).map(u => [u, u]), state.unit, false)}}</div>
+                <div class="unit-select">
+                    <label class="control-label">Unit</label>
+                    <div class="button-group">${{optionButtons('unit', Object.keys(BALANCE_UNITS).map(u => [u, u]), state.unit, false)}}</div>
+                </div>
             </div>`;
 
             const controlsDiv = document.getElementById('balanceControls');
