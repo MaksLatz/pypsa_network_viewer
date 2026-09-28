@@ -80,7 +80,8 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
 
     component_info = _extract_component_info(network, currency=currency, custom_plots=custom_plots)
 
-    data_json = json.dumps(component_info, indent=2, default=str)
+    # '<\/' is valid JSON and stops embedded HTML (e.g. the explore map) from closing the <script> block
+    data_json = json.dumps(component_info, indent=2, default=str).replace('</', '<\\/')
 
     html_content = f'''<!DOCTYPE html>
 <html lang="en">
@@ -266,6 +267,72 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
         }}
         .network-details-value {{
             color: #555;
+        }}
+        .tab-bar {{
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            align-items: flex-end;
+            gap: 15px;
+            border-bottom: 2px solid #e0e0e0;
+            margin: -10px 0 25px 0;
+        }}
+        .tab-buttons {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+        }}
+        .tab-bar .tab-btn {{
+            background: none;
+            color: #7f8c8d;
+            border: none;
+            border-bottom: 3px solid transparent;
+            border-radius: 0;
+            box-shadow: none;
+            padding: 12px 18px;
+            margin-bottom: -2px;
+            font-size: 1.05em;
+        }}
+        .tab-bar .tab-btn:hover {{
+            color: #2c3e50;
+            transform: none;
+            box-shadow: none;
+        }}
+        .tab-bar .tab-btn.active {{
+            color: #2c3e50;
+            border-bottom-color: #4a6741;
+        }}
+        .period-picker {{
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding-bottom: 8px;
+        }}
+        .period-picker .control-label {{
+            margin-bottom: 0;
+            font-size: 1em;
+        }}
+        .period-picker select {{
+            padding: 8px;
+        }}
+        .tab-panel {{
+            display: none;
+        }}
+        .tab-panel.active {{
+            display: block;
+        }}
+        .controls-section.single {{
+            grid-template-columns: minmax(200px, 400px);
+        }}
+        .section-title {{
+            margin: 0 0 10px 0;
+            color: #2c3e50;
+        }}
+        .explore-frame {{
+            width: 100%;
+            height: 720px;
+            border: 1px solid #e0e0e0;
+            border-radius: 10px;
         }}
         .filter-bar {{
             display: flex;
@@ -474,64 +541,73 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
             <p>Interactive exploration of PyPSA network components and timeseries data</p>
         </div>
 
-        <div id="networkSummary" class="network-summary">
-            <!-- Will be populated by JavaScript -->
-        </div>
-
-        <div class="controls-section">
-            <div class="control-group">
-                <label class="control-label">Component Type</label>
-                <select id="componentTypeSelect">
-                    <option value="">Select component type...</option>
-                </select>
+        <!-- Top-level navigation; tabs without content (e.g. no custom plots) are hidden by JavaScript -->
+        <nav class="tab-bar">
+            <div class="tab-buttons" role="tablist">
+                <button type="button" class="tab-btn" data-tab="summary" role="tab">Network Summary</button>
+                <button type="button" class="tab-btn" data-tab="balance" role="tab">Power Balance</button>
+                <button type="button" class="tab-btn" data-tab="components" role="tab">Network Components</button>
+                <button type="button" class="tab-btn" data-tab="custom" role="tab">Custom Plots</button>
+                <button type="button" class="tab-btn" data-tab="explore" role="tab">Network Explore</button>
             </div>
-            <div class="control-group">
-                <label class="control-label">Data Type</label>
-                <select id="dataTypeSelect" disabled>
-                    <option value="">Select data type...</option>
-                    <option value="static">Static Data</option>
-                    <option value="timeseries">Time Series</option>
-                </select>
-            </div>
-            <div class="control-group">
-                <label class="control-label">Time Series / Plot</label>
-                <select id="timeseriesSelect" disabled>
-                    <option value="">Select timeseries...</option>
-                </select>
-            </div>
-        </div>
-
-        <div class="controls-section">
-            <div class="control-group" id="yearGroup" style="display:none;">
-                <label class="control-label">Investment Period</label>
+            <div class="period-picker" id="yearGroup" style="display:none;">
+                <label class="control-label" for="yearSelect">Investment Period</label>
                 <select id="yearSelect">
                     <option value="">All Periods</option>
                 </select>
             </div>
-            <div class="control-group">
-                <button onclick="loadData()" id="loadButton" disabled>Load Data</button>
-            </div>
-            <div class="control-group">
-                <button onclick="clearDisplay()" id="clearButton">Clear Display</button>
-            </div>
-        </div>
+        </nav>
 
-        <div class="content-area">
-            <div class="loading" id="loading">Loading data...</div>
-            <div id="contentDisplay">
-                <div class="info-panel">
-                    <h3>Welcome to PyPSA Network Analyzer</h3>
-                    <p>Select a component type and data type above to begin exploring your network data.</p>
-                    <p><strong>Instructions:</strong></p>
-                    <ul>
-                        <li>Choose a component type from the dropdown</li>
-                        <li>Select whether you want to view static properties or timeseries data</li>
-                        <li>For timeseries, choose which specific attribute to plot</li>
-                        <li>Click "Load Data" to display the information</li>
-                    </ul>
+        <section class="tab-panel" id="tab-summary">
+            <div id="networkSummary" class="network-summary"></div>
+            <div id="networkDetails"></div>
+        </section>
+
+        <section class="tab-panel" id="tab-balance">
+            <div class="content-area"><div id="balanceView"></div></div>
+        </section>
+
+        <section class="tab-panel" id="tab-components">
+            <div class="controls-section">
+                <div class="control-group">
+                    <label class="control-label" for="componentTypeSelect">Component Type</label>
+                    <select id="componentTypeSelect">
+                        <option value="">Select component type...</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <label class="control-label" for="dataTypeSelect">Data Type</label>
+                    <select id="dataTypeSelect" disabled>
+                        <option value="">Select data type...</option>
+                        <option value="static">Static Data</option>
+                        <option value="timeseries">Time Series</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <label class="control-label" for="timeseriesSelect">Time Series</label>
+                    <select id="timeseriesSelect" disabled>
+                        <option value="">Select timeseries...</option>
+                    </select>
                 </div>
             </div>
-        </div>
+            <div class="content-area">
+                <div id="contentDisplay"></div>
+            </div>
+        </section>
+
+        <section class="tab-panel" id="tab-custom">
+            <div class="controls-section single">
+                <div class="control-group">
+                    <label class="control-label" for="customPlotSelect">Plot</label>
+                    <select id="customPlotSelect"></select>
+                </div>
+            </div>
+            <div class="content-area"><div id="customPlotView"></div></div>
+        </section>
+
+        <section class="tab-panel" id="tab-explore">
+            <div id="exploreView"></div>
+        </section>
     </div>
 
     <script>
@@ -567,7 +643,7 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
             {{ key: 'load', label: 'Load', color: '#c0392b',
                hint: 'Power consumed by the loads at the selected nodes.' }},
             {{ key: 'generation', label: 'Generation', color: '#27ae60',
-               hint: 'Power produced at the selected nodes by the generators plus Hydro Generation (net power from the hydro buses; pumping counts as negative). Opens generator filters and the carrier breakdown.' }},
+               hint: 'Power produced at the selected nodes by the generators plus Hydro Generation (net power from the hydro buses; pumping counts as negative). Opens the generator filters; the carrier breakdown is in Chart Style.' }},
             {{ key: 'imports', label: 'Imports', color: '#2980b9',
                hint: 'Net power reaching the selected nodes through links (into the node +, out of the node −). Links to hydro buses are counted as Hydro Generation instead.' }},
             {{ key: 'storage', label: 'Storage (net)', color: '#8e44ad',
@@ -579,14 +655,16 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
         // Pseudo-carrier for power delivered by links from hydro buses; appears in the Carrier filter and breakdown
         const HYDRO_CARRIER = 'Hydro Generation';
         const HYDRO_PUMPING = 'Hydro Pumping';
+        const INTERNAL_SOURCE = 'Within selected nodes (losses)';
         const BALANCE_UNITS = {{ kW: 1000, MW: 1, GW: 0.001 }};
         const balanceState = {{
             visible: {{ load: true, generation: true, imports: false, storage: false, mismatch: false }},
             loadSplit: false,        // one load line per bus
             genSplit: false,         // one generation line per bus
             importSplit: false,      // one import line per bus
-            showCarriers: false,     // add the generation-by-carrier breakdown
-            carrierMode: 'stacked',  // 'lines' | 'stacked'
+            showCarriers: false,     // Chart Style: generation broken down by carrier
+            showSources: false,      // Chart Style: imports broken down by source node
+            carrierMode: 'stacked',  // 'lines' | 'stacked' (applies to both breakdowns)
             stackStyle: 'filled',    // 'filled' | 'line'
             unit: 'MW'
         }};
@@ -603,18 +681,45 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
             const colors = networkData.carrier_colors || {{}};
             if (carrier === HYDRO_CARRIER || carrier === HYDRO_PUMPING) return colors.hydro || HYDRO_COLOR;
             if (colors[carrier]) return colors[carrier];
+            return hashColor(carrier);
+        }}
+
+        // Stable palette colour derived from a name
+        function hashColor(name) {{
             let hash = 0;
-            for (const ch of String(carrier)) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
+            for (const ch of String(name)) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
             return BUS_COLORS[hash % BUS_COLORS.length];
         }}
+
+        // Plotly traces for one breakdown series (a carrier or an import source). When stacked, the positive
+        // and negative parts stack separately, up from and down from zero, so mixed-sign series (imports vs
+        // exports, generation vs pumping) stack correctly; both parts share one legend entry.
+        function breakdownTraces(m, x, y, stacked, filled) {{
+            const base = {{ x, type: 'scatter', mode: 'lines', name: m.label, legendgroup: 'breakdown|' + m.label }};
+            const line = () => ({{ width: stacked && filled ? 0.5 : 2, color: m.color, dash: m.source && !stacked ? 'dot' : 'solid' }});
+            if (!stacked) return [{{ ...base, y, line: line() }}];
+
+            let parts = [['pos', y.map(v => Math.max(v, 0))], ['neg', y.map(v => Math.min(v, 0))]]
+                .filter(([, values]) => values.some(v => v !== 0));
+            if (parts.length === 0) parts = [['pos', y]];
+            return parts.map(([sign, values], i) => {{
+                const t = {{ ...base, y: values, line: line(), stackgroup: 'breakdown-' + sign, showlegend: i === 0 }};
+                if (filled) t.fillcolor = m.color; else t.fill = 'none';
+                if (sign === 'neg') t.opacity = 0.6;  // exports / pumping: same colour, lighter
+                return t;
+            }});
+        }}
+
+        let activeTab = null;
+        const TAB_STORAGE_KEY = 'pypsa-viewer-tab';
 
         document.addEventListener('DOMContentLoaded', function() {{
             populateNetworkSummary();
             populateComponentTypes();
+            populateCustomPlots();
             setupEventListeners();
             if (networkData.summary.is_multi_index) {{
-                const yearGroup = document.getElementById('yearGroup');
-                yearGroup.style.display = 'flex';
+                document.getElementById('yearGroup').style.display = 'flex';
                 const yearSelect = document.getElementById('yearSelect');
                 networkData.summary.periods.forEach(p => {{
                     const opt = document.createElement('option');
@@ -626,10 +731,64 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
                     yearSelect.value = networkData.summary.periods[0];
                 }}
             }}
+            setupTabs();
         }});
 
+        // --- Tabs -----------------------------------------------------------------------
+        function tabAvailable(name) {{
+            if (name === 'balance') return !!networkData.balance;
+            if (name === 'custom') return (networkData.summary.custom_plots || []).length > 0;
+            return true;
+        }}
+
+        function setupTabs() {{
+            document.querySelectorAll('.tab-btn').forEach(btn => {{
+                if (!tabAvailable(btn.dataset.tab)) btn.style.display = 'none';
+                btn.addEventListener('click', () => activateTab(btn.dataset.tab));
+            }});
+            // Reopen the tab the viewer last used (per-browser convenience only)
+            let saved = null;
+            try {{ saved = localStorage.getItem(TAB_STORAGE_KEY); }} catch (e) {{}}
+            activateTab(saved && tabAvailable(saved) && document.getElementById('tab-' + saved) ? saved : 'summary');
+        }}
+
+        function activateTab(name) {{
+            activeTab = name;
+            document.querySelectorAll('.tab-btn').forEach(b => {{
+                const on = b.dataset.tab === name;
+                b.classList.toggle('active', on);
+                b.setAttribute('aria-selected', on);
+            }});
+            document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === 'tab-' + name));
+            try {{ localStorage.setItem(TAB_STORAGE_KEY, name); }} catch (e) {{}}
+            // Plots are drawn when their tab is visible so Plotly can size them correctly
+            renderTab(name);
+        }}
+
+        function renderTab(name) {{
+            try {{
+                if (name === 'balance') displayLoadGeneration();
+                else if (name === 'components') renderComponentsView();
+                else if (name === 'custom') displayCustomPlot(document.getElementById('customPlotSelect').value);
+                else if (name === 'explore') renderExplore();
+            }} catch (error) {{
+                showError('Error loading data: ' + error.message);
+            }}
+        }}
+
+        function setupEventListeners() {{
+            document.getElementById('componentTypeSelect').addEventListener('change', onComponentTypeChange);
+            document.getElementById('dataTypeSelect').addEventListener('change', onDataTypeChange);
+            document.getElementById('timeseriesSelect').addEventListener('change', renderComponentsView);
+            document.getElementById('customPlotSelect').addEventListener('change', function() {{
+                displayCustomPlot(this.value);
+            }});
+            // The investment period applies to every tab: redraw the one on screen
+            document.getElementById('yearSelect').addEventListener('change', () => renderTab(activeTab));
+        }}
+
+        // --- Network Summary tab ----------------------------------------------------------
         function populateNetworkSummary() {{
-            const summaryDiv = document.getElementById('networkSummary');
             const summary = networkData.summary;
             const skip = new Set(['network_info', 'global_constraints', 'custom_plots', 'is_multi_index', 'periods', 'period_index']);
 
@@ -639,162 +798,108 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
                     html += `<div class="summary-card"><h3>${{value}}</h3><p>${{key.replace(/_/g, ' ').toUpperCase()}}</p></div>`;
                 }}
             }});
-            summaryDiv.innerHTML = html;
+            document.getElementById('networkSummary').innerHTML = html;
+
+            const info = summary.network_info || {{}};
+            let details = '<div class="network-details"><h3 class="section-title">Network Details</h3>';
+            Object.entries(info).forEach(([key, value]) => {{
+                details += `<div class="network-details-item"><div class="network-details-label">${{escapeHtml(key)}}</div><div class="network-details-value">${{escapeHtml(value)}}</div></div>`;
+            }});
+            document.getElementById('networkDetails').innerHTML = details + '</div>';
         }}
 
+        // --- Network Components tab ---------------------------------------------------------
         function populateComponentTypes() {{
             const select = document.getElementById('componentTypeSelect');
-
-            if (networkData.summary.network_info) {{
+            Object.keys(networkData.components).forEach(comp => {{
                 const opt = document.createElement('option');
-                opt.value = 'network_summary';
-                opt.textContent = 'Network Summary';
+                opt.value = comp;
+                opt.textContent = comp.charAt(0).toUpperCase() + comp.slice(1).replace(/_/g, ' ');
                 select.appendChild(opt);
-            }}
-
-            if (networkData.balance) {{
-                const opt = document.createElement('option');
-                opt.value = 'load_generation';
-                opt.textContent = 'Power Balance';
-                select.appendChild(opt);
-            }}
-
+            }});
             if (networkData.summary.global_constraints) {{
                 const opt = document.createElement('option');
                 opt.value = 'global_constraints';
                 opt.textContent = 'Global Constraints';
                 select.appendChild(opt);
             }}
-
-            if (networkData.summary.custom_plots && networkData.summary.custom_plots.length > 0) {{
-                const opt = document.createElement('option');
-                opt.value = 'custom_plots';
-                opt.textContent = 'Custom Plots';
-                select.appendChild(opt);
-            }}
-
-            Object.keys(networkData.components).forEach(comp => {{
-                const opt = document.createElement('option');
-                opt.value = comp;
-                opt.textContent = comp.charAt(0).toUpperCase() + comp.slice(1);
-                select.appendChild(opt);
-            }});
         }}
 
-        function setupEventListeners() {{
-            document.getElementById('componentTypeSelect').addEventListener('change', onComponentTypeChange);
-            document.getElementById('dataTypeSelect').addEventListener('change', onDataTypeChange);
-            document.getElementById('yearSelect').addEventListener('change', function() {{
-                if (currentData && currentData.type === 'timeseries') {{
-                    displayTimeseriesData(currentData.componentType, currentData.timeseriesName);
-                }} else if (currentData && currentData.type === 'load_generation') {{
-                    displayLoadGeneration();
-                }}
+        // Fill the timeseries dropdown for the chosen component, keeping the previous choice when it exists
+        function populateTimeseriesOptions(componentType) {{
+            const select = document.getElementById('timeseriesSelect');
+            const previous = select.value;
+            const names = Object.keys(networkData.components[componentType].timeseries);
+            select.innerHTML = `<option value="">${{names.length ? 'Select timeseries...' : '(no timeseries available)'}}</option>`;
+            names.forEach(ts => {{
+                const opt = document.createElement('option');
+                opt.value = ts;
+                opt.textContent = ts;
+                select.appendChild(opt);
             }});
+            select.value = names.includes(previous) ? previous : '';
         }}
 
+        // The data type (and timeseries, when available) is kept when switching component
         function onComponentTypeChange() {{
             const componentType = document.getElementById('componentTypeSelect').value;
             const dataTypeSelect = document.getElementById('dataTypeSelect');
             const timeseriesSelect = document.getElementById('timeseriesSelect');
 
-            timeseriesSelect.innerHTML = '<option value="">Select timeseries...</option>';
-            timeseriesSelect.disabled = true;
-
-            if (componentType === 'network_summary' || componentType === 'global_constraints' || componentType === 'load_generation') {{
+            if (!componentType || componentType === 'global_constraints') {{
                 dataTypeSelect.disabled = true;
-                dataTypeSelect.value = '';
-                document.getElementById('loadButton').disabled = false;
-            }} else if (componentType === 'custom_plots') {{
-                dataTypeSelect.disabled = false;
-                dataTypeSelect.innerHTML = '<option value="">Select plot...</option>';
-                networkData.summary.custom_plots.forEach(name => {{
-                    const opt = document.createElement('option');
-                    opt.value = name;
-                    opt.textContent = name;
-                    dataTypeSelect.appendChild(opt);
-                }});
-                document.getElementById('loadButton').disabled = true;
-            }} else if (componentType) {{
-                dataTypeSelect.disabled = false;
-                dataTypeSelect.innerHTML = '<option value="">Select data type...</option><option value="static">Static Data</option><option value="timeseries">Time Series</option>';
-                dataTypeSelect.value = '';
-                document.getElementById('loadButton').disabled = true;
+                timeseriesSelect.disabled = true;
             }} else {{
-                dataTypeSelect.disabled = true;
-                dataTypeSelect.innerHTML = '<option value="">Select data type...</option><option value="static">Static Data</option><option value="timeseries">Time Series</option>';
-                document.getElementById('loadButton').disabled = true;
+                dataTypeSelect.disabled = false;
+                populateTimeseriesOptions(componentType);
+                timeseriesSelect.disabled = dataTypeSelect.value !== 'timeseries';
             }}
+            renderComponentsView();
         }}
 
         function onDataTypeChange() {{
             const componentType = document.getElementById('componentTypeSelect').value;
-            const dataType = document.getElementById('dataTypeSelect').value;
             const timeseriesSelect = document.getElementById('timeseriesSelect');
-
-            if (componentType === 'custom_plots' && dataType) {{
-                timeseriesSelect.disabled = true;
-                document.getElementById('loadButton').disabled = false;
-            }} else if (dataType === 'static') {{
-                timeseriesSelect.disabled = true;
-                timeseriesSelect.innerHTML = '<option value="">Select timeseries...</option>';
-                document.getElementById('loadButton').disabled = false;
-            }} else if (dataType === 'timeseries') {{
-                const timeseries = networkData.components[componentType].timeseries;
-                timeseriesSelect.innerHTML = '<option value="">Select timeseries...</option>';
-                Object.keys(timeseries).forEach(ts => {{
-                    const opt = document.createElement('option');
-                    opt.value = ts;
-                    opt.textContent = ts;
-                    timeseriesSelect.appendChild(opt);
-                }});
+            if (document.getElementById('dataTypeSelect').value === 'timeseries') {{
+                populateTimeseriesOptions(componentType);
                 timeseriesSelect.disabled = false;
-                timeseriesSelect.onchange = function() {{
-                    document.getElementById('loadButton').disabled = !this.value;
-                }};
+            }} else {{
+                timeseriesSelect.disabled = true;
             }}
+            renderComponentsView();
         }}
 
-        function loadData() {{
+        // Show whatever the current selection allows; no Load button needed
+        function renderComponentsView() {{
             const componentType = document.getElementById('componentTypeSelect').value;
             const dataType = document.getElementById('dataTypeSelect').value;
             const timeseries = document.getElementById('timeseriesSelect').value;
-
-            if (!componentType) return;
-
-            showLoading(true);
-            setTimeout(() => {{
-                try {{
-                    if (componentType === 'network_summary') {{
-                        displayNetworkSummary();
-                    }} else if (componentType === 'global_constraints') {{
-                        displayGlobalConstraints();
-                    }} else if (componentType === 'load_generation') {{
-                        displayLoadGeneration();
-                    }} else if (componentType === 'custom_plots' && dataType) {{
-                        displayCustomPlot(dataType);
-                    }} else if (dataType === 'static') {{
-                        displayStaticData(componentType);
-                    }} else if (dataType === 'timeseries' && timeseries) {{
-                        displayTimeseriesData(componentType, timeseries);
-                    }}
-                }} catch (error) {{
-                    showError('Error loading data: ' + error.message);
-                }}
-                showLoading(false);
-            }}, 300);
-        }}
-
-        function displayNetworkSummary() {{
-            const data = networkData.summary.network_info;
             const contentDiv = document.getElementById('contentDisplay');
-            let html = '<div class="info-panel"><h3>Network Summary</h3></div><div class="network-details">';
-            Object.entries(data).forEach(([key, value]) => {{
-                html += `<div class="network-details-item"><div class="network-details-label">${{key}}</div><div class="network-details-value">${{value}}</div></div>`;
-            }});
-            html += '</div>';
-            contentDiv.innerHTML = html;
-            currentData = {{ type: 'network_summary', data }};
+            const hint = (title, text) => {{
+                contentDiv.innerHTML = `<div class="info-panel"><h3>${{title}}</h3>${{text}}</div>`;
+            }};
+
+            if (!componentType) {{
+                hint('Instructions', `<ol class="instructions">
+                    <li>Choose a <strong>Component Type</strong> (Buses, Generators, … or Global Constraints).</li>
+                    <li>Choose <strong>Static Data</strong> for the attribute table, or <strong>Time Series</strong> for plots.</li>
+                    <li>For Time Series, choose the attribute to plot. The view updates as soon as the selection is complete.</li>
+                </ol>`);
+            }} else if (componentType === 'global_constraints') {{
+                displayGlobalConstraints();
+            }} else if (dataType === 'static') {{
+                displayStaticData(componentType);
+            }} else if (dataType === 'timeseries') {{
+                if (timeseries) {{
+                    displayTimeseriesData(componentType, timeseries);
+                }} else if (Object.keys(networkData.components[componentType].timeseries).length === 0) {{
+                    hint('No time series', `<p>${{escapeHtml(componentType)}} has no timeseries data. Choose Static Data instead.</p>`);
+                }} else {{
+                    hint('Select a time series', '<p>Choose the attribute to plot in the <strong>Time Series</strong> dropdown.</p>');
+                }}
+            }} else {{
+                hint('Select a data type', '<p>Choose <strong>Static Data</strong> or <strong>Time Series</strong>.</p>');
+            }}
         }}
 
         function displayGlobalConstraints() {{
@@ -815,25 +920,6 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
             html += '</tbody></table></div>';
             contentDiv.innerHTML = html;
             currentData = {{ type: 'global_constraints', data }};
-        }}
-
-        function displayCustomPlot(plotName) {{
-            const plotData = networkData.custom_plots[plotName];
-            const contentDiv = document.getElementById('contentDisplay');
-
-            if (!plotData) {{
-                contentDiv.innerHTML = '<div class="error-panel"><strong>Custom plot data not found</strong></div>';
-                return;
-            }}
-
-            contentDiv.innerHTML = `
-                <div class="info-panel"><h3>Custom Plot: ${{plotName}}</h3></div>
-                <div class="plot-container"><div id="customPlot" style="width:100%;height:600px;"></div></div>`;
-
-            Plotly.newPlot('customPlot', plotData.data, plotData.layout, {{
-                responsive: true, displayModeBar: true, displaylogo: false
-            }});
-            currentData = {{ type: 'custom_plot', plotName, data: plotData }};
         }}
 
         function displayStaticData(componentType) {{
@@ -861,6 +947,54 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
             html += '</tbody></table></div>';
             contentDiv.innerHTML = html;
             currentData = {{ type: 'static', componentType, data }};
+        }}
+
+        // --- Custom Plots tab -------------------------------------------------------------
+        function populateCustomPlots() {{
+            const select = document.getElementById('customPlotSelect');
+            (networkData.summary.custom_plots || []).forEach(name => {{
+                const opt = document.createElement('option');
+                opt.value = name;
+                opt.textContent = name;
+                select.appendChild(opt);
+            }});
+        }}
+
+        function displayCustomPlot(plotName) {{
+            const plotData = networkData.custom_plots[plotName];
+            const view = document.getElementById('customPlotView');
+
+            if (!plotData) {{
+                view.innerHTML = '<div class="error-panel"><strong>Custom plot data not found</strong></div>';
+                return;
+            }}
+
+            view.innerHTML = `
+                <div class="info-panel"><h3>Custom Plot: ${{escapeHtml(plotName)}}</h3></div>
+                <div class="plot-container"><div id="customPlot" style="width:100%;height:600px;"></div></div>`;
+
+            Plotly.newPlot('customPlot', plotData.data, plotData.layout, {{
+                responsive: true, displayModeBar: true, displaylogo: false
+            }});
+        }}
+
+        // --- Network Explore tab: the map produced by n.explore(), embedded in an iframe ---------
+        function renderExplore() {{
+            const view = document.getElementById('exploreView');
+            if (view.dataset.rendered) return;  // keep the map (and its zoom) when switching tabs
+            view.dataset.rendered = '1';
+            const explore = networkData.explore || {{}};
+            let html = `<div class="info-panel"><h3>Network Explore</h3>
+                <p>Interactive map from PyPSA's <code>n.explore()</code>. Drag to pan, scroll to zoom, hover over a component for its attributes.
+                The base map is loaded from the internet.</p></div>`;
+            if (explore.warning) html += `<div class="error-panel">${{escapeHtml(explore.warning)}}</div>`;
+            if (explore.error || !explore.html) {{
+                html += `<div class="error-panel"><strong>The map could not be created:</strong> ${{escapeHtml(explore.error || 'no map data')}}</div>`;
+                view.innerHTML = html;
+                return;
+            }}
+            view.innerHTML = html + '<iframe id="exploreFrame" class="explore-frame" title="Network map"></iframe>';
+            document.getElementById('exploreFrame').srcdoc = explore.html;
         }}
 
         function displayTimeseriesData(componentType, timeseriesName) {{
@@ -1166,6 +1300,7 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
 
             const flows = {{}};
             const total = zeros();
+            const bySource = {{}};
             const hydro = {{ pos: zeros(), neg: zeros(), net: zeros(), byBus: {{}} }};
             const connected = new Set(), hydroLinks = new Set();
             let totalLinks = 0;
@@ -1192,20 +1327,26 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
                         connected.add(name);
                         const key = split ? bus : '';
                         const acc = flows[key] = flows[key] || zeros();
+                        // Source node = the link's other end (bus1 for the bus0 port, otherwise bus0).
+                        // Links between two selected nodes only leave their losses: grouped as INTERNAL_SOURCE.
+                        const other = linkStatic[port.bus_attr === 'bus0' ? 'bus1' : 'bus0'][name];
+                        const source = nodes.has(other) ? INTERNAL_SOURCE : other;
+                        const bySrc = bySource[source] = bySource[source] || zeros();
                         for (let i = 0; i < length; i++) {{
                             const v = -(values[i] || 0);
                             acc[i] += v;
                             total[i] += v;
+                            bySrc[i] += v;
                         }}
                     }}
                 }});
             }});
-            return {{ flows, total, hydro, hydroLinks: hydroLinks.size, connected: connected.size, totalLinks }};
+            return {{ flows, total, bySource, hydro, hydroLinks: hydroLinks.size, connected: connected.size, totalLinks }};
         }}
 
         // Build the Power Balance skeleton; controls and plot are filled by refreshBalance()
         function displayLoadGeneration() {{
-            const contentDiv = document.getElementById('contentDisplay');
+            const contentDiv = document.getElementById('balanceView');
 
             if (!networkData.balance) {{
                 contentDiv.innerHTML = '<div class="error-panel"><strong>No load or generation data available</strong></div>';
@@ -1238,6 +1379,10 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
             const nodeOptions = balance.buses.filter(b => !hydro.has(b)).sort();
             const pickedNodes = (activeFilters[BALANCE_NODE_FILTERS] || {{}}).bus || [];
             const nodes = new Set(pickedNodes.length ? pickedNodes : nodeOptions);
+            // Splitting generation / imports by bus is meaningless for a single node: the option is hidden and ignored
+            const multiNode = nodes.size > 1;
+            const genSplit = state.genSplit && multiNode;
+            const importSplit = state.importSplit && multiNode;
 
             const attrOf = (entry, attr, fallback) => {{
                 const col = entry && networkData.components[entry.component].static[attr];
@@ -1257,7 +1402,7 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
             const loadBus = attrOf(balance.loads, 'bus', '(no bus)');
 
             // --- Link flows: imports, and Hydro Generation from links to hydro buses
-            const imports = hasImports ? computeImports(balance, length, nodes, state.importSplit) : null;
+            const imports = hasImports ? computeImports(balance, length, nodes, importSplit) : null;
             const hydroAtNodes = !!(imports && imports.hydroLinks);
 
             // --- Generators at the selected nodes, then the carrier / type filters of the Generators tab.
@@ -1297,17 +1442,31 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
             // Aggregate on the full time axis (only for plots that are switched on), then restrict to the selected period
             const raw = {{}}, meta = {{}};
             const add = (key, values, m) => {{ raw[key] = values; meta[key] = m; }};
-            if (isOn('generation') && state.showCarriers) {{
+            // Breakdowns (Chart Style): generation by carrier and imports by source node, added first so their
+            // stacked areas are drawn underneath the total lines
+            const genBreakdown = isOn('generation') && state.showCarriers;
+            const importBreakdown = isOn('imports') && state.showSources;
+            if (genBreakdown) {{
+                const carrierEntry = (carrier, v) => add('carrier|' + carrier, v,
+                    {{ group: 'breakdown', label: carrier, color: carrierColor(carrier) }});
                 if (genSeries) {{
                     Object.entries(groupSeries(genNames, genSeries, genCarrier, length))
-                        .forEach(([carrier, v]) => add('carrier|' + carrier, v, {{ group: 'carrier', label: carrier }}));
+                        .forEach(([carrier, v]) => carrierEntry(carrier, v));
                 }}
                 if (includeHydro) {{
-                    add('carrier|' + HYDRO_CARRIER, imports.hydro.pos, {{ group: 'carrier', label: HYDRO_CARRIER }});
-                    if (imports.hydro.neg.some(v => v < 0)) {{
-                        add('carrier|' + HYDRO_PUMPING, imports.hydro.neg, {{ group: 'carrier', label: HYDRO_PUMPING, negative: true }});
-                    }}
+                    carrierEntry(HYDRO_CARRIER, imports.hydro.pos);
+                    if (imports.hydro.neg.some(v => v < 0)) carrierEntry(HYDRO_PUMPING, imports.hydro.neg);
                 }}
+            }}
+            if (importBreakdown) {{
+                Object.keys(imports.bySource).sort().forEach(src => {{
+                    const internal = src === INTERNAL_SOURCE;
+                    add('source|' + src, imports.bySource[src], {{
+                        group: 'breakdown', source: true,
+                        label: internal ? src : `Imports from ${{src}}`,
+                        color: internal ? '#95a5a6' : hashColor(src)
+                    }});
+                }});
             }}
             if (isOn('load')) {{
                 if (state.loadSplit) {{
@@ -1318,7 +1477,7 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
                 }}
             }}
             if (isOn('generation')) {{
-                if (state.genSplit) {{
+                if (genSplit) {{
                     const byBus = genSeries ? groupSeries(genNames, genSeries, genBus, length) : {{}};
                     if (includeHydro) {{
                         Object.entries(imports.hydro.byBus).forEach(([bus, v]) => {{
@@ -1357,10 +1516,16 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
 
             const stacked = state.carrierMode === 'stacked';
             const filled = state.stackStyle === 'filled';
-            // Object key order follows insertion, so carrier areas are drawn first and lines stay on top
-            const traces = Object.entries(seriesData).map(([key, values]) => {{
+            const exportColumns = [];
+            // Object key order follows insertion, so breakdown areas are drawn first and lines stay on top
+            const traces = Object.entries(seriesData).flatMap(([key, values]) => {{
                 const m = meta[key];
-                const t = {{ x: timeIndex, y: values.map(v => v * scale), type: 'scatter', mode: 'lines' }};
+                const y = values.map(v => v * scale);
+                if (m.group === 'breakdown') {{
+                    exportColumns.push({{ name: m.label, values: y }});
+                    return breakdownTraces(m, timeIndex, y, stacked, filled);
+                }}
+                const t = {{ x: timeIndex, y, type: 'scatter', mode: 'lines' }};
                 if (m.bus !== undefined) t.legendgroup = m.bus;
                 if (m.group === 'load') {{
                     Object.assign(t, m.bus !== undefined
@@ -1370,20 +1535,6 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
                     Object.assign(t, m.bus !== undefined
                         ? {{ name: `Generation – ${{m.bus}}`, line: {{ width: 2, color: busColor(m.bus) }} }}
                         : {{ name: 'Generation', line: {{ width: 3, color: '#27ae60' }} }});
-                }} else if (m.group === 'carrier') {{
-                    const color = carrierColor(m.label);
-                    t.name = m.label;
-                    t.line = {{ width: stacked && filled ? 0.5 : 2, color }};
-                    if (m.negative) t.opacity = 0.6;  // Hydro Pumping: same colour, lighter
-                    if (stacked) {{
-                        // Negative contributions (pumping) stack downwards from zero in their own group
-                        t.stackgroup = m.negative ? 'carriers-negative' : 'carriers';
-                        if (filled) {{
-                            t.fillcolor = color;
-                        }} else {{
-                            t.fill = 'none';
-                        }}
-                    }}
                 }} else if (m.group === 'imports') {{
                     Object.assign(t, m.bus !== undefined
                         ? {{ name: `Imports (net) – ${{m.bus}}`, line: {{ width: 2, dash: 'dashdot', color: busColor(m.bus) }} }}
@@ -1393,9 +1544,10 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
                 }} else if (m.group === 'mismatch') {{
                     Object.assign(t, {{ name: 'Mismatch', line: {{ width: 2, dash: 'dot', color: '#2c3e50' }} }});
                 }}
-                return t;
+                exportColumns.push({{ name: t.name, values: y }});
+                return [t];
             }});
-            balanceExport = {{ timeStrings, unit: state.unit, periodLabel, columns: traces.map(t => ({{ name: t.name, values: t.y }})) }};
+            balanceExport = {{ timeStrings, unit: state.unit, periodLabel, columns: exportColumns }};
 
             // --- Info panel
             const notes = [];
@@ -1407,6 +1559,7 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
                     <li>Pick the node(s) to analyse in <strong>Nodes</strong> (All = the whole network).</li>
                     <li>Switch plots on or off with the coloured buttons. Switching a plot on opens its options.</li>
                     <li>Hover over a button for an explanation of what it shows.</li>
+                    <li>Use <strong>Chart Style</strong> to break Generation down by carrier or Imports by source node, as lines or stacked areas.</li>
                     <li>Choose the unit, and use <strong>Download CSV</strong> to save what is plotted.</li>
                 </ol>
                 ${{notes.map(n => `<p><em>${{n}}</em></p>`).join('')}}`;
@@ -1428,30 +1581,17 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
                 </div>`;
             }}
             if (balance.generators) {{
-                const carriersOff = !state.showCarriers;
                 const genOptions = {{ id: 'balanceGenFilters', title: 'Generation filters', noun: 'generators',
-                    extraHtml: flagButton('genSplit', 'Split by Bus') }};
-                panels.generation = (genCfg.length
+                    extraHtml: multiNode ? flagButton('genSplit', 'Split by Bus') : '' }};
+                panels.generation = genCfg.length
                     ? renderFilterBar(BALANCE_GEN_FILTERS, genFilterValues,
                         balance.generators.names.length, genNames.length, genOptions)
-                    : `<div class="filter-bar" id="balanceGenFilters"><div class="filter-title">Generation filters</div>${{genOptions.extraHtml}}</div>`)
-                    + `<div class="filter-bar" id="balanceGenDisplay">
-                        <div class="filter-title">Generation Display Options</div>
-                        ${{flagButton('showCarriers', 'Show Carrier Breakdown')}}
-                        <div class="control-group">
-                            <label class="control-label">Carrier Breakdown</label>
-                            <div class="button-group">${{optionButtons('carrierMode', [['lines', 'Lines'], ['stacked', 'Stacked']], state.carrierMode, carriersOff)}}</div>
-                        </div>
-                        <div class="control-group">
-                            <label class="control-label">Stacked Style</label>
-                            <div class="button-group">${{optionButtons('stackStyle', [['filled', 'Filled'], ['line', 'Line Only']], state.stackStyle, carriersOff || !stacked)}}</div>
-                        </div>
-                    </div>`;
+                    : `<div class="filter-bar" id="balanceGenFilters"><div class="filter-title">Generation filters</div>${{genOptions.extraHtml}}</div>`;
             }}
             if (hasImports) {{
                 panels.imports = `<div class="filter-bar" id="balanceImportOptions">
                     <div class="filter-title">Import options</div>
-                    ${{flagButton('importSplit', 'Split by Bus')}}
+                    ${{multiNode ? flagButton('importSplit', 'Split by Bus') : ''}}
                     <div class="filter-count">Showing ${{imports.connected}} of ${{imports.totalLinks}} links connected</div>
                     <div class="filter-note">Power flowing <strong>into</strong> the selected node(s) is positive; power flowing <strong>out</strong> is negative.
                         Flows between two selected nodes cancel out. Links to hydro buses are not imports: they are counted under
@@ -1472,6 +1612,31 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
                     controls += `<div class="group-panel" style="border-left-color:${{g.color}}">${{panels[g.key]}}</div>`;
                 }}
             }});
+            // Chart Style: which breakdowns to draw and how (shared by Generation and Imports), always visible
+            const breakdownButton = (flag, label, enabled, hint) =>
+                `<button type="button" class="toggle-btn${{state[flag] && enabled ? ' active' : ''}}" data-flag="${{flag}}"
+                    title="${{escapeHtml(hint)}}" ${{enabled ? '' : 'disabled'}}>${{label}}</button>`;
+            const anyBreakdown = genBreakdown || importBreakdown;
+            controls += `<div class="filter-bar" id="balanceChartStyle">
+                <div class="filter-title">Chart Style</div>
+                <div class="control-group">
+                    <label class="control-label">Breakdown</label>
+                    <div class="button-group">
+                        ${{breakdownButton('showCarriers', 'Generation by Carrier', isOn('generation'),
+                            'Split Generation into one series per carrier (switch Generation on to use).')}}
+                        ${{breakdownButton('showSources', 'Imports by Source Node', isOn('imports'),
+                            'Split Imports into one series per node the power comes from (switch Imports on to use).')}}
+                    </div>
+                </div>
+                <div class="control-group">
+                    <label class="control-label">Breakdown Style</label>
+                    <div class="button-group">${{optionButtons('carrierMode', [['lines', 'Lines'], ['stacked', 'Stacked']], state.carrierMode, !anyBreakdown)}}</div>
+                </div>
+                <div class="control-group">
+                    <label class="control-label">Stacked Style</label>
+                    <div class="button-group">${{optionButtons('stackStyle', [['filled', 'Filled'], ['line', 'Line Only']], state.stackStyle, !anyBreakdown || !stacked)}}</div>
+                </div>
+            </div>`;
             // Directly above the plot: Download on the left, unit selector on the right (both always available)
             controls += `<div class="unit-bar">
                 <button type="button" class="toggle-btn" id="balanceDownload" title="Download the plotted series (current nodes, filters, period and unit) as CSV">⬇ Download CSV</button>
@@ -1543,16 +1708,6 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
             a.click();
             a.remove();
             URL.revokeObjectURL(a.href);
-        }}
-
-        function clearDisplay() {{
-            document.getElementById('contentDisplay').innerHTML =
-                '<div class="info-panel"><h3>Display Cleared</h3><p>Select component and data type to load new data.</p></div>';
-            currentData = null;
-        }}
-
-        function showLoading(show) {{
-            document.getElementById('loading').style.display = show ? 'block' : 'none';
         }}
 
         function showError(message) {{
@@ -1708,6 +1863,7 @@ def _extract_component_info(network, currency='$', custom_plots=None):
     # --- Power balance and carrier colours ------------------------------------
     component_info['balance'] = _extract_balance(network, snapshot_time_index)
     component_info['carrier_colors'] = _extract_carrier_colors(network)
+    component_info['explore'] = _extract_explore(network)
 
     component_info['summary']['snapshots'] = len(network.snapshots)
     component_info['summary']['is_multi_index'] = is_multi_index
@@ -1903,6 +2059,25 @@ def _extract_balance(network, time_index):
     balance['storage'] = storage_entries or None
 
     return balance
+
+
+def _extract_explore(network):
+    """
+    Render ``network.explore()`` (an interactive pydeck map) to standalone HTML for the
+    Network Explore tab. Returns {'html', 'warning', 'error'}; failures never stop the export.
+    """
+    result = {'html': None, 'warning': None, 'error': None}
+    buses = next((c for c in network.components.values() if getattr(c, 'name', '') == 'Bus'), None)
+    if buses is not None and not buses.static.empty and {'x', 'y'} <= set(buses.static.columns):
+        if (buses.static['x'].fillna(0) == 0).all() and (buses.static['y'].fillna(0) == 0).all():
+            result['warning'] = ('All buses have coordinates x = y = 0, so they are drawn on top of each other. '
+                                 'Set bus x (longitude) and y (latitude) to see the network layout.')
+    try:
+        deck = network.explore()
+        result['html'] = deck.to_html(as_string=True, notebook_display=False)
+    except Exception as e:  # e.g. pydeck not installed
+        result['error'] = f'{type(e).__name__}: {e}'
+    return result
 
 
 def _extract_carrier_colors(network):
