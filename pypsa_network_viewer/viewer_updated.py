@@ -297,6 +297,37 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
             display: flex;
             gap: 6px;
         }}
+        .toggle-btn .swatch {{
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 8px;
+            border: 1px solid white;
+            vertical-align: middle;
+        }}
+        .toggle-btn .caret {{
+            margin-left: 8px;
+            font-size: 0.85em;
+        }}
+        .group-panel {{
+            border-left: 4px solid #2c3e50;
+            border-radius: 8px;
+            margin-bottom: 15px;
+        }}
+        .group-panel .filter-bar {{
+            margin-bottom: 0;
+            border-radius: 0 8px 8px 0;
+        }}
+        .unit-bar {{
+            display: flex;
+            justify-content: flex-end;
+            align-items: center;
+            gap: 10px;
+        }}
+        .unit-bar .control-label {{
+            margin-bottom: 0;
+        }}
         .toggle-bar {{
             display: flex;
             flex-wrap: wrap;
@@ -414,11 +445,12 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
         const activeFilters = {{}};  // filter state key -> {{ attr: value }}
 
         // Load vs Generation toggle groups and display state
+        // color links each button to its options panel and (for load/generation/storage) its plot line
         const BALANCE_GROUPS = [
-            {{ key: 'load', label: 'Load' }},
-            {{ key: 'generation', label: 'Total Generation' }},
-            {{ key: 'carriers', label: 'Generation by Carrier' }},
-            {{ key: 'storage', label: 'Storage Units (net)' }}
+            {{ key: 'load', label: 'Load', color: '#c0392b' }},
+            {{ key: 'generation', label: 'Generation', color: '#27ae60' }},
+            {{ key: 'carriers', label: 'Generation by Carrier', color: '#e67e22' }},
+            {{ key: 'storage', label: 'Storage Units (net)', color: '#8e44ad' }}
         ];
         const BALANCE_UNITS = {{ kW: 1000, MW: 1, GW: 0.001 }};
         const balanceState = {{
@@ -983,7 +1015,7 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
                 }} else if (group === 'generation') {{
                     Object.assign(t, label
                         ? {{ name: `Generation – ${{label}}`, legendgroup: label, line: {{ width: 2, color: busColor(label) }} }}
-                        : {{ name: 'Total Generation', line: {{ width: 3, color: '#27ae60' }} }});
+                        : {{ name: 'Generation', line: {{ width: 3, color: '#27ae60' }} }});
                 }} else if (group === 'carriers') {{
                     t.name = label;
                     t.line = {{ width: stacked && filled ? 0.5 : 2 }};
@@ -1001,6 +1033,8 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
                 }}
                 return t;
             }});
+            // Draw the carrier breakdown first so load/generation lines stay on top of filled areas
+            traces.sort((a, b) => (b.group === 'carriers') - (a.group === 'carriers'));
             const availableGroups = new Set(traces.map(t => t.group));
 
             // --- Info panel
@@ -1009,42 +1043,54 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
             if (!balance.generators) notes.push('Generation dispatch is unavailable — optimise the network to see generation.');
             document.getElementById('balanceInfo').innerHTML = `
                 <h3>Load vs Generation${{periodLabel}}</h3>
-                <p>Use the buttons below to show or hide each plot, filter and split load and generation, and change how they are displayed.</p>
+                <p>Use the buttons below to show or hide each plot. Switching a plot on opens its filters and display options.</p>
                 ${{notes.map(n => `<p><em>${{n}}</em></p>`).join('')}}`;
 
-            // --- Controls
+            // --- Controls: each plot button opens its own options panel while it is switched on
+            const isOn = key => availableGroups.has(key) && state.visible[key];
+            const panels = {{}};
+            if (loadCfg) {{
+                panels.load = renderFilterBar(BALANCE_LOAD_FILTERS, balance.loads.component, loadCfg,
+                    balance.loads.names.length, loadNames.length,
+                    {{ id: 'balanceLoadFilters', title: 'Load filters', noun: 'loads', extraHtml: splitButton('loadSplit', 'Split by Bus') }});
+            }}
+            if (genCfg) {{
+                panels.generation = renderFilterBar(BALANCE_GEN_FILTERS, balance.generators.component, genCfg,
+                    balance.generators.names.length, genNames.length,
+                    {{ id: 'balanceGenFilters', title: 'Generation filters', noun: 'generators', extraHtml: splitButton('genSplit', 'Split by Bus') }});
+            }}
+            if (availableGroups.has('carriers')) {{
+                panels.carriers = `<div class="filter-bar" id="balanceCarrierOptions">
+                    <div class="filter-title">Generation by Carrier options</div>
+                    <div class="control-group">
+                        <label class="control-label">Generation by Carrier</label>
+                        <div class="button-group">${{optionButtons('carrierMode', [['lines', 'Lines'], ['stacked', 'Stacked']], state.carrierMode, false)}}</div>
+                    </div>
+                    <div class="control-group">
+                        <label class="control-label">Stacked Style</label>
+                        <div class="button-group">${{optionButtons('stackStyle', [['filled', 'Filled'], ['line', 'Line Only']], state.stackStyle, !stacked)}}</div>
+                    </div>
+                </div>`;
+            }}
+
             const visibilityButtons = BALANCE_GROUPS.map(g => {{
                 const enabled = availableGroups.has(g.key);
-                const active = enabled && state.visible[g.key];
-                return `<button type="button" class="toggle-btn${{active ? ' active' : ''}}" data-group="${{g.key}}" ${{enabled ? '' : 'disabled'}}>${{g.label}}</button>`;
+                const active = isOn(g.key);
+                const caret = panels[g.key] ? `<span class="caret">${{active ? '▾' : '▸'}}</span>` : '';
+                return `<button type="button" class="toggle-btn${{active ? ' active' : ''}}" data-group="${{g.key}}" ${{enabled ? '' : 'disabled'}}>
+                    <span class="swatch" style="background:${{g.color}}"></span>${{g.label}}${{caret}}</button>`;
             }}).join('');
 
             let controls = `<div class="toggle-bar">${{visibilityButtons}}</div>`;
-            if (loadCfg) {{
-                controls += renderFilterBar(BALANCE_LOAD_FILTERS, balance.loads.component, loadCfg,
-                    balance.loads.names.length, loadNames.length,
-                    {{ id: 'balanceLoadFilters', title: 'Load', noun: 'loads', extraHtml: splitButton('loadSplit', 'Split by Bus') }});
-            }}
-            if (genCfg) {{
-                controls += renderFilterBar(BALANCE_GEN_FILTERS, balance.generators.component, genCfg,
-                    balance.generators.names.length, genNames.length,
-                    {{ id: 'balanceGenFilters', title: 'Generation', noun: 'generators', extraHtml: splitButton('genSplit', 'Split by Bus') }});
-            }}
-            const carriersOff = !availableGroups.has('carriers') || !state.visible.carriers;
-            controls += `<div class="filter-bar" id="balanceDisplayOptions">
-                <div class="filter-title">Display</div>
-                <div class="control-group">
-                    <label class="control-label">Generation by Carrier</label>
-                    <div class="button-group">${{optionButtons('carrierMode', [['lines', 'Lines'], ['stacked', 'Stacked']], state.carrierMode, carriersOff)}}</div>
-                </div>
-                <div class="control-group">
-                    <label class="control-label">Stacked Style</label>
-                    <div class="button-group">${{optionButtons('stackStyle', [['filled', 'Filled'], ['line', 'Line Only']], state.stackStyle, carriersOff || !stacked)}}</div>
-                </div>
-                <div class="control-group">
-                    <label class="control-label">Unit</label>
-                    <div class="button-group">${{optionButtons('unit', Object.keys(BALANCE_UNITS).map(u => [u, u]), state.unit, false)}}</div>
-                </div>
+            BALANCE_GROUPS.forEach(g => {{
+                if (panels[g.key] && isOn(g.key)) {{
+                    controls += `<div class="group-panel" style="border-left-color:${{g.color}}">${{panels[g.key]}}</div>`;
+                }}
+            }});
+            // Unit selector: always available, right-aligned directly above the plot
+            controls += `<div class="unit-bar">
+                <label class="control-label">Unit</label>
+                <div class="button-group">${{optionButtons('unit', Object.keys(BALANCE_UNITS).map(u => [u, u]), state.unit, false)}}</div>
             </div>`;
 
             const controlsDiv = document.getElementById('balanceControls');
@@ -1062,8 +1108,10 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
                 state[this.dataset.option] = this.dataset.value;
                 refreshBalance();
             }}));
-            if (loadCfg) bindFilterBar(document.getElementById('balanceLoadFilters'), BALANCE_LOAD_FILTERS, refreshBalance);
-            if (genCfg) bindFilterBar(document.getElementById('balanceGenFilters'), BALANCE_GEN_FILTERS, refreshBalance);
+            const loadBar = document.getElementById('balanceLoadFilters');
+            const genBar = document.getElementById('balanceGenFilters');
+            if (loadBar) bindFilterBar(loadBar, BALANCE_LOAD_FILTERS, refreshBalance);
+            if (genBar) bindFilterBar(genBar, BALANCE_GEN_FILTERS, refreshBalance);
 
             // --- Plot (react keeps the x-axis zoom between updates; the y-axis resets when the unit changes)
             Plotly.react('balancePlot', traces, {{
