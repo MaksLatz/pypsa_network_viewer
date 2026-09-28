@@ -263,6 +263,52 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
         .network-details-value {{
             color: #555;
         }}
+        .filter-bar {{
+            display: flex;
+            flex-wrap: wrap;
+            align-items: flex-end;
+            gap: 15px;
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+        }}
+        .filter-bar .control-group {{
+            min-width: 180px;
+        }}
+        .filter-bar .control-label {{
+            font-size: 0.95em;
+        }}
+        .filter-bar .filter-count {{
+            color: #7f8c8d;
+            padding-bottom: 12px;
+        }}
+        .filter-bar button {{
+            padding: 10px 16px;
+        }}
+        .toggle-bar {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 15px;
+        }}
+        .toggle-btn {{
+            background: white;
+            color: #2c3e50;
+            border: 2px solid #2c3e50;
+            box-shadow: none;
+            padding: 8px 16px;
+        }}
+        .toggle-btn.active {{
+            background: linear-gradient(135deg, #2c3e50 0%, #4a6741 100%);
+            color: white;
+        }}
+        .toggle-btn:disabled {{
+            opacity: 0.4;
+            cursor: not-allowed;
+            transform: none;
+        }}
     </style>
 </head>
 <body>
@@ -337,6 +383,32 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
 
         let currentData = null;
 
+        // Static attributes offered as timeseries filters, keyed by PyPSA component class
+        const FILTER_CONFIG = {{
+            Generator: [
+                {{ attr: 'carrier', label: 'Carrier' }},
+                {{ attr: 'type', label: 'Type' }},
+                {{ attr: 'bus', label: 'Bus (node)' }}
+            ],
+            Link: [
+                {{ attr: 'bus0', label: 'From bus (bus0)' }},
+                {{ attr: 'bus1', label: 'To bus (bus1)' }}
+            ]
+        }};
+        const FILTER_NOTES = {{
+            Link: 'p0 &gt; 0 means power flows from bus0 to bus1; negative values indicate flow in the reverse direction.'
+        }};
+        const activeFilters = {{}};  // componentType -> {{ attr: value }}
+
+        // Load vs Generation toggle groups and their on/off state
+        const BALANCE_GROUPS = [
+            {{ key: 'load', label: 'Load' }},
+            {{ key: 'generation', label: 'Total Generation' }},
+            {{ key: 'carriers', label: 'Generation by Carrier' }},
+            {{ key: 'storage', label: 'Storage Units (net)' }}
+        ];
+        const balanceVisibility = {{ load: true, generation: true, carriers: false, storage: false }};
+
         document.addEventListener('DOMContentLoaded', function() {{
             populateNetworkSummary();
             populateComponentTypes();
@@ -381,6 +453,13 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
                 select.appendChild(opt);
             }}
 
+            if (networkData.balance) {{
+                const opt = document.createElement('option');
+                opt.value = 'load_generation';
+                opt.textContent = 'Load vs Generation';
+                select.appendChild(opt);
+            }}
+
             if (networkData.summary.global_constraints) {{
                 const opt = document.createElement('option');
                 opt.value = 'global_constraints';
@@ -409,6 +488,8 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
             document.getElementById('yearSelect').addEventListener('change', function() {{
                 if (currentData && currentData.type === 'timeseries') {{
                     displayTimeseriesData(currentData.componentType, currentData.timeseriesName);
+                }} else if (currentData && currentData.type === 'load_generation') {{
+                    displayLoadGeneration();
                 }}
             }});
         }}
@@ -421,7 +502,7 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
             timeseriesSelect.innerHTML = '<option value="">Select timeseries...</option>';
             timeseriesSelect.disabled = true;
 
-            if (componentType === 'network_summary' || componentType === 'global_constraints') {{
+            if (componentType === 'network_summary' || componentType === 'global_constraints' || componentType === 'load_generation') {{
                 dataTypeSelect.disabled = true;
                 dataTypeSelect.value = '';
                 document.getElementById('loadButton').disabled = false;
@@ -489,6 +570,8 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
                         displayNetworkSummary();
                     }} else if (componentType === 'global_constraints') {{
                         displayGlobalConstraints();
+                    }} else if (componentType === 'load_generation') {{
+                        displayLoadGeneration();
                     }} else if (componentType === 'custom_plots' && dataType) {{
                         displayCustomPlot(dataType);
                     }} else if (dataType === 'static') {{
@@ -590,32 +673,33 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
                 return;
             }}
 
-            // Multi-index: filter by selected investment period
-            let timeIndex = data.time_index.map(t => new Date(t));
-            let seriesData = data.data;
-            let periodLabel = '';
+            let {{ timeIndex, seriesData, periodLabel }} = applyPeriodFilter(data.time_index, data.data);
 
-            if (networkData.summary.is_multi_index) {{
-                const selectedPeriod = document.getElementById('yearSelect').value;
-                if (selectedPeriod) {{
-                    const periodIdx = networkData.summary.period_index;
-                    const mask = periodIdx.map(p => p === selectedPeriod);
-                    timeIndex = timeIndex.filter((_, i) => mask[i]);
-                    seriesData = {{}};
-                    Object.entries(data.data).forEach(([name, values]) => {{
-                        seriesData[name] = values.filter((_, i) => mask[i]);
-                    }});
-                    periodLabel = ` — Period: ${{selectedPeriod}}`;
-                }}
+            // Attribute filters (carrier / type / bus for generators, bus0 / bus1 for links)
+            const filterCfg = getFilterConfig(componentType);
+            const totalSeries = Object.keys(seriesData).length;
+            if (filterCfg) {{
+                seriesData = applyAttributeFilters(componentType, filterCfg, seriesData);
             }}
+            const shownSeries = Object.keys(seriesData).length;
+            const filterHtml = filterCfg ? renderFilterBar(componentType, filterCfg, totalSeries, shownSeries) : '';
 
             contentDiv.innerHTML = `
                 <div class="info-panel">
                     <h3>${{componentType.charAt(0).toUpperCase() + componentType.slice(1)}} - ${{timeseriesName}}${{periodLabel}}</h3>
                     <p><strong>Time Range:</strong> ${{data.time_range.start}} to ${{data.time_range.end}}</p>
-                    <p><strong>Series:</strong> ${{Object.keys(data.data).length}} with ${{timeIndex.length}} time steps shown</p>
+                    <p><strong>Series:</strong> ${{shownSeries}} of ${{totalSeries}} with ${{timeIndex.length}} time steps shown</p>
                 </div>
-                <div class="plot-container"><div id="timeseriesPlot" style="width:100%;height:600px;"></div></div>`;
+                ${{filterHtml}}
+                <div class="plot-container">${{shownSeries === 0
+                    ? '<div class="error-panel"><strong>No series match the selected filters.</strong></div>'
+                    : '<div id="timeseriesPlot" style="width:100%;height:600px;"></div>'}}</div>`;
+
+            currentData = {{ type: 'timeseries', componentType, timeseriesName, data }};
+            if (filterCfg) {{
+                bindFilterBar(componentType, filterCfg);
+            }}
+            if (shownSeries === 0) return;
 
             const traces = Object.entries(seriesData).map(([name, values]) => ({{
                 x: timeIndex, y: values, type: 'scatter', mode: 'lines', name, line: {{ width: 2 }}
@@ -629,8 +713,179 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
                 legend: {{ orientation: 'h', x: 0.5, xanchor: 'center', y: -0.2 }},
                 margin: {{ l: 80, r: 80, t: 80, b: 120 }}
             }}, {{ responsive: true, displayModeBar: true, displaylogo: false }});
+        }}
 
-            currentData = {{ type: 'timeseries', componentType, timeseriesName, data }};
+        function escapeHtml(value) {{
+            return String(value).replace(/[&<>"']/g, c => ({{
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+            }})[c]);
+        }}
+
+        // Multi-index: restrict a timeseries to the selected investment period
+        function applyPeriodFilter(timeStrings, seriesDict) {{
+            let timeIndex = timeStrings.map(t => new Date(t));
+            let seriesData = seriesDict;
+            let periodLabel = '';
+
+            if (networkData.summary.is_multi_index) {{
+                const selectedPeriod = document.getElementById('yearSelect').value;
+                if (selectedPeriod) {{
+                    const mask = networkData.summary.period_index.map(p => p === selectedPeriod);
+                    timeIndex = timeIndex.filter((_, i) => mask[i]);
+                    seriesData = {{}};
+                    Object.entries(seriesDict).forEach(([name, values]) => {{
+                        seriesData[name] = values ? values.filter((_, i) => mask[i]) : values;
+                    }});
+                    periodLabel = ` — Period: ${{selectedPeriod}}`;
+                }}
+            }}
+            return {{ timeIndex, seriesData, periodLabel }};
+        }}
+
+        function getComponentClass(componentType) {{
+            const classes = networkData.component_classes || {{}};
+            return Object.keys(classes).find(cls => classes[cls] === componentType) || null;
+        }}
+
+        // Filter definitions for a component, limited to attributes present in its static data
+        function getFilterConfig(componentType) {{
+            const cfg = FILTER_CONFIG[getComponentClass(componentType)];
+            if (!cfg) return null;
+            const staticData = networkData.components[componentType].static;
+            const available = cfg.filter(f => staticData[f.attr]);
+            return available.length > 0 ? available : null;
+        }}
+
+        function applyAttributeFilters(componentType, filterCfg, seriesData) {{
+            const selected = activeFilters[componentType] || {{}};
+            const staticData = networkData.components[componentType].static;
+            const result = {{}};
+            Object.entries(seriesData).forEach(([name, values]) => {{
+                const keep = filterCfg.every(f => {{
+                    const wanted = selected[f.attr];
+                    if (wanted === undefined || wanted === '__all__') return true;
+                    return staticData[f.attr][name] === wanted;
+                }});
+                if (keep) result[name] = values;
+            }});
+            return result;
+        }}
+
+        function renderFilterBar(componentType, filterCfg, totalSeries, shownSeries) {{
+            const selected = activeFilters[componentType] || {{}};
+            const staticData = networkData.components[componentType].static;
+            const note = FILTER_NOTES[getComponentClass(componentType)];
+
+            let html = '<div class="filter-bar">';
+            filterCfg.forEach(f => {{
+                const values = [...new Set(Object.values(staticData[f.attr]))].sort();
+                const current = selected[f.attr] ?? '__all__';
+                html += `<div class="control-group">
+                    <label class="control-label">${{escapeHtml(f.label)}}</label>
+                    <select data-filter-attr="${{escapeHtml(f.attr)}}">
+                        <option value="__all__">All</option>
+                        ${{values.map(v => `<option value="${{escapeHtml(v)}}" ${{v === current ? 'selected' : ''}}>${{v === '' ? '(none)' : escapeHtml(v)}}</option>`).join('')}}
+                    </select>
+                </div>`;
+            }});
+            html += `<div class="control-group"><button type="button" id="resetFiltersButton">Reset Filters</button></div>
+                <div class="filter-count">Showing ${{shownSeries}} of ${{totalSeries}} series</div>`;
+            if (note) {{
+                html += `<div style="flex-basis:100%;color:#7f8c8d;font-size:0.9em;">${{note}}</div>`;
+            }}
+            return html + '</div>';
+        }}
+
+        function bindFilterBar(componentType, filterCfg) {{
+            const rerender = () => displayTimeseriesData(currentData.componentType, currentData.timeseriesName);
+            document.querySelectorAll('.filter-bar select[data-filter-attr]').forEach(sel => {{
+                sel.addEventListener('change', function() {{
+                    activeFilters[componentType] = activeFilters[componentType] || {{}};
+                    activeFilters[componentType][this.dataset.filterAttr] = this.value;
+                    rerender();
+                }});
+            }});
+            document.getElementById('resetFiltersButton').addEventListener('click', () => {{
+                delete activeFilters[componentType];
+                rerender();
+            }});
+        }}
+
+        function displayLoadGeneration() {{
+            const balance = networkData.balance;
+            const contentDiv = document.getElementById('contentDisplay');
+
+            if (!balance) {{
+                contentDiv.innerHTML = '<div class="error-panel"><strong>No load or generation data available</strong></div>';
+                return;
+            }}
+
+            const series = {{ __load: balance.load, __generation: balance.generation, __storage: balance.storage }};
+            Object.entries(balance.generation_by_carrier).forEach(([c, v]) => {{ series['carrier:' + c] = v; }});
+            const {{ timeIndex, seriesData, periodLabel }} = applyPeriodFilter(balance.time_index, series);
+
+            // Each trace records the toggle group it belongs to
+            const traces = [];
+            if (seriesData.__load) {{
+                traces.push({{ group: 'load', x: timeIndex, y: seriesData.__load, type: 'scatter', mode: 'lines',
+                    name: balance.load_source === 'p' ? 'Load' : 'Load (p_set)', line: {{ width: 3, color: '#c0392b' }} }});
+            }}
+            if (seriesData.__generation) {{
+                traces.push({{ group: 'generation', x: timeIndex, y: seriesData.__generation, type: 'scatter', mode: 'lines',
+                    name: 'Total Generation', line: {{ width: 3, color: '#27ae60' }} }});
+            }}
+            Object.keys(balance.generation_by_carrier).forEach(c => {{
+                const t = {{ group: 'carriers', x: timeIndex, y: seriesData['carrier:' + c], type: 'scatter', mode: 'lines',
+                    name: c, stackgroup: 'carriers', line: {{ width: 0.5 }} }};
+                if (balance.carrier_colors[c]) t.fillcolor = t.line.color = balance.carrier_colors[c];
+                traces.push(t);
+            }});
+            if (seriesData.__storage) {{
+                traces.push({{ group: 'storage', x: timeIndex, y: seriesData.__storage, type: 'scatter', mode: 'lines',
+                    name: 'Storage Units (net)', line: {{ width: 2, dash: 'dash', color: '#8e44ad' }} }});
+            }}
+            const availableGroups = new Set(traces.map(t => t.group));
+            traces.forEach(t => {{ t.visible = balanceVisibility[t.group]; }});
+
+            const notes = [];
+            if (balance.load_source === 'p_set') notes.push('Load shows the p_set input (network has no optimised load results).');
+            if (!balance.generation) notes.push('Generation dispatch is unavailable — optimise the network to see generation.');
+
+            const buttons = BALANCE_GROUPS.map(g => {{
+                const enabled = availableGroups.has(g.key);
+                const active = enabled && balanceVisibility[g.key];
+                return `<button type="button" class="toggle-btn${{active ? ' active' : ''}}" data-group="${{g.key}}" ${{enabled ? '' : 'disabled'}}>${{g.label}}</button>`;
+            }}).join('');
+
+            contentDiv.innerHTML = `
+                <div class="info-panel">
+                    <h3>Load vs Generation${{periodLabel}}</h3>
+                    <p>Use the buttons below to show or hide each plot.</p>
+                    ${{notes.map(n => `<p><em>${{n}}</em></p>`).join('')}}
+                </div>
+                <div class="toggle-bar">${{buttons}}</div>
+                <div class="plot-container"><div id="balancePlot" style="width:100%;height:600px;"></div></div>`;
+
+            Plotly.newPlot('balancePlot', traces, {{
+                title: `Load vs Generation${{periodLabel}}`,
+                xaxis: {{ title: 'Time', type: 'date' }},
+                yaxis: {{ title: balance.unit }},
+                hovermode: 'x unified',
+                legend: {{ orientation: 'h', x: 0.5, xanchor: 'center', y: -0.2 }},
+                margin: {{ l: 80, r: 80, t: 80, b: 120 }}
+            }}, {{ responsive: true, displayModeBar: true, displaylogo: false }});
+
+            document.querySelectorAll('.toggle-bar .toggle-btn').forEach(btn => {{
+                btn.addEventListener('click', function() {{
+                    const group = this.dataset.group;
+                    balanceVisibility[group] = !balanceVisibility[group];
+                    this.classList.toggle('active', balanceVisibility[group]);
+                    const indices = traces.map((t, i) => t.group === group ? i : -1).filter(i => i >= 0);
+                    Plotly.restyle('balancePlot', {{ visible: balanceVisibility[group] }}, indices);
+                }});
+            }});
+
+            currentData = {{ type: 'load_generation' }};
         }}
 
         function clearDisplay() {{
@@ -725,6 +980,8 @@ def _extract_component_info(network, currency='$', custom_plots=None):
     component_info = {
         'summary': {},
         'components': {},
+        'component_classes': {},
+        'balance': None,
         'custom_plots': {}
     }
 
@@ -762,6 +1019,8 @@ def _extract_component_info(network, currency='$', custom_plots=None):
             continue
 
         component_info['summary'][comp_name] = len(static_df)
+        # Map class name (e.g. 'Generator') to the key used in 'components'
+        component_info['component_classes'][getattr(comp, 'name', comp_name)] = comp_name
         component_info['components'][comp_name] = {
             'static': {},
             'timeseries': {}
@@ -789,6 +1048,9 @@ def _extract_component_info(network, currency='$', custom_plots=None):
                 'unit': unit
             }
 
+    # --- Load vs generation balance ------------------------------------------
+    component_info['balance'] = _extract_balance(network, snapshot_time_index)
+
     component_info['summary']['snapshots'] = len(network.snapshots)
     component_info['summary']['is_multi_index'] = is_multi_index
     if is_multi_index:
@@ -800,9 +1062,9 @@ def _extract_component_info(network, currency='$', custom_plots=None):
         'Network Name': network.name or '(unnamed)',
         'PyPSA Version': network.pypsa_version,
         'Objective': str(network.objective),
-        'Objective Constant': str(network._objective_constant),
-        'Linearised Unit Commitment': str(network._linearized_uc),
-        'Multi Invest': str(network._multi_invest),
+        'Objective Constant': str(getattr(network, '_objective_constant', 'N/A')),
+        'Linearised Unit Commitment': str(getattr(network, '_linearized_uc', 'N/A')),
+        'Multi Invest': str(getattr(network, '_multi_invest', 'N/A')),
         'SRID': str(network.srid),
     }
     if hasattr(network, 'meta') and network.meta:
@@ -854,6 +1116,99 @@ def _extract_component_info(network, currency='$', custom_plots=None):
         component_info['summary']['custom_plots'] = plot_names
 
     return component_info
+
+
+def _dense_attribute(comp, attr, snapshots):
+    """
+    Return a snapshots x components DataFrame for ``attr``, using the timeseries
+    value where one exists and falling back to the static value otherwise.
+    Inactive components are dropped.
+    """
+    static = comp.static
+    if 'active' in static.columns:
+        static = static[static['active'].astype(bool)]
+    if static.empty:
+        return pd.DataFrame(index=snapshots)
+
+    base = static[attr] if attr in static.columns else pd.Series(0.0, index=static.index)
+    dense = pd.DataFrame(
+        [base.astype(float).values] * len(snapshots),
+        index=snapshots, columns=static.index
+    )
+
+    ts = dict(comp.dynamic.items()).get(attr)
+    if ts is not None and not ts.empty:
+        cols = ts.columns.intersection(dense.columns)
+        dense[cols] = ts[cols].reindex(snapshots).astype(float).values
+    return dense.fillna(0.0)
+
+
+def _has_results(comp, attr='p'):
+    """True if the component has a non-empty (i.e. optimised) timeseries for ``attr``."""
+    ts = dict(comp.dynamic.items()).get(attr)
+    return ts is not None and not ts.empty
+
+
+def _group_by_carrier(df, static):
+    """Sum the columns of ``df`` by the carrier of each component."""
+    if df.empty:
+        return {}
+    carriers = static['carrier'].reindex(df.columns).fillna('').astype(str)
+    carriers = carriers.replace('', '(no carrier)')
+    grouped = df.T.groupby(carriers).sum().T
+    return {str(c): grouped[c].tolist() for c in grouped.columns}
+
+
+def _extract_balance(network, time_index):
+    """
+    Build the aggregated load and generation timeseries used by the
+    "Load vs Generation" view. Returns None if the network has no loads
+    and no generators.
+    """
+    snapshots = network.snapshots
+    comps = {getattr(c, 'name', k): c for k, c in network.components.items()}
+    loads = comps.get('Load')
+    gens = comps.get('Generator')
+    storage = comps.get('StorageUnit')
+
+    has_loads = loads is not None and not loads.static.empty
+    has_gens = gens is not None and not gens.static.empty
+    if not has_loads and not has_gens:
+        return None
+
+    balance = {
+        'time_index': time_index,
+        'unit': 'MW',
+        'load': None,
+        'load_source': None,
+        'generation': None,
+        'generation_by_carrier': {},
+        'storage': None,
+        'carrier_colors': {},
+    }
+
+    if has_loads:
+        # Optimised load 'p' if available, otherwise the p_set input
+        attr = 'p' if _has_results(loads) else 'p_set'
+        balance['load'] = _dense_attribute(loads, attr, snapshots).sum(axis=1).tolist()
+        balance['load_source'] = attr
+
+    if has_gens and _has_results(gens):
+        gen_p = _dense_attribute(gens, 'p', snapshots)
+        balance['generation'] = gen_p.sum(axis=1).tolist()
+        balance['generation_by_carrier'] = _group_by_carrier(gen_p, gens.static)
+
+    if storage is not None and not storage.static.empty and _has_results(storage):
+        balance['storage'] = _dense_attribute(storage, 'p', snapshots).sum(axis=1).tolist()
+
+    carriers = comps.get('Carrier')
+    if carriers is not None and 'color' in carriers.static.columns:
+        balance['carrier_colors'] = {
+            str(k): str(v) for k, v in carriers.static['color'].items()
+            if isinstance(v, str) and v
+        }
+
+    return balance
 
 
 def _get_unit_for_attribute(attr, currency='$'):
