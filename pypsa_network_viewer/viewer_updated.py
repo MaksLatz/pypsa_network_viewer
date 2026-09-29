@@ -226,6 +226,31 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
             margin-bottom: 20px;
             color: #721c24;
         }}
+        .warning-panel {{
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            background: #fff4e0;
+            border: 1px solid #f0c36d;
+            border-left: 4px solid #e67e22;
+            border-radius: 8px;
+            padding: 12px 15px;
+            margin-bottom: 15px;
+            color: #7a4a00;
+        }}
+        .warning-panel .toggle-btn {{
+            border-color: #e67e22;
+            color: #7a4a00;
+        }}
+        input[type=date] {{
+            padding: 8px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-family: inherit;
+            font-size: 0.95em;
+        }}
         .network-summary {{
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -657,8 +682,12 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
         const HYDRO_PUMPING = 'Hydro Pumping';
         const INTERNAL_SOURCE = 'Within selected nodes (losses)';
         const BALANCE_UNITS = {{ kW: 1000, MW: 1, GW: 0.001 }};
-        const balanceState = {{
-            visible: {{ load: true, generation: true, imports: false, storage: false, mismatch: false }},
+        // Generation by Carrier draws many stacked series: beyond this span the plot slows down
+        const CARRIER_WARN_DAYS = 31;
+        const CARRIER_RECOMMENDED_MONTHS = 2;
+        // Default view: every plot switched off. Reset Filters in the Nodes bar returns to it.
+        const balanceDefaults = () => ({{
+            visible: {{ load: false, generation: false, imports: false, storage: false, mismatch: false }},
             loadSplit: false,        // one load line per bus
             genSplit: false,         // one generation line per bus
             importSplit: false,      // one import line per bus
@@ -666,8 +695,11 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
             showSources: false,      // Chart Style: imports broken down by source node
             carrierMode: 'stacked',  // 'lines' | 'stacked' (applies to both breakdowns)
             stackStyle: 'filled',    // 'filled' | 'line'
+            rangeStart: '',          // Time Range, 'YYYY-MM-DD' ('' = from the first snapshot)
+            rangeEnd: '',            // inclusive; '' = to the last snapshot
             unit: 'MW'
-        }};
+        }});
+        const balanceState = balanceDefaults();
         // Filter state keys for the Power Balance view (kept separate from the component tabs)
         const BALANCE_NODE_FILTERS = '__balance_nodes';  // shared node picker for all plots
         const BALANCE_GEN_FILTERS = '__balance_generators';
@@ -679,7 +711,9 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
         // Colour of a carrier: its static 'color' attribute, else a stable fallback from the palette
         function carrierColor(carrier) {{
             const colors = networkData.carrier_colors || {{}};
-            if (carrier === HYDRO_CARRIER || carrier === HYDRO_PUMPING) return colors.hydro || HYDRO_COLOR;
+            if (carrier === HYDRO_CARRIER) return colors.hydro || HYDRO_COLOR;
+            // Pumping: a much darker shade of the hydro colour (same family, clearly distinct), drawn hatched
+            if (carrier === HYDRO_PUMPING) return shadeColor(colors.hydro || HYDRO_COLOR, -0.55);
             if (colors[carrier]) return colors[carrier];
             return hashColor(carrier);
         }}
@@ -691,12 +725,26 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
             return BUS_COLORS[hash % BUS_COLORS.length];
         }}
 
+        // Lighten (amount > 0) or darken (amount < 0) a '#rgb' / '#rrggbb' colour; other formats are returned as is
+        function shadeColor(color, amount) {{
+            let hex = String(color).trim().replace('#', '');
+            if (/^[0-9a-f]{{3}}$/i.test(hex)) hex = hex.split('').map(c => c + c).join('');
+            if (!/^[0-9a-f]{{6}}$/i.test(hex)) return color;
+            const target = amount < 0 ? 0 : 255;
+            return '#' + [0, 2, 4].map(i => {{
+                const c = parseInt(hex.slice(i, i + 2), 16);
+                return Math.round(c + (target - c) * Math.abs(amount)).toString(16).padStart(2, '0');
+            }}).join('');
+        }}
+
         // Plotly traces for one breakdown series (a carrier or an import source). When stacked, the positive
         // and negative parts stack separately, up from and down from zero, so mixed-sign series (imports vs
         // exports, generation vs pumping) stack correctly; both parts share one legend entry.
+        // m.hatched marks a series drawn with a hatch pattern / dashed line (Hydro Pumping).
         function breakdownTraces(m, x, y, stacked, filled) {{
             const base = {{ x, type: 'scatter', mode: 'lines', name: m.label, legendgroup: 'breakdown|' + m.label }};
-            const line = () => ({{ width: stacked && filled ? 0.5 : 2, color: m.color, dash: m.source && !stacked ? 'dot' : 'solid' }});
+            const dash = m.hatched ? 'dash' : m.source && !stacked ? 'dot' : 'solid';
+            const line = () => ({{ width: stacked && filled ? 0.5 : 2, color: m.color, dash }});
             if (!stacked) return [{{ ...base, y, line: line() }}];
 
             let parts = [['pos', y.map(v => Math.max(v, 0))], ['neg', y.map(v => Math.min(v, 0))]]
@@ -705,7 +753,8 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
             return parts.map(([sign, values], i) => {{
                 const t = {{ ...base, y: values, line: line(), stackgroup: 'breakdown-' + sign, showlegend: i === 0 }};
                 if (filled) t.fillcolor = m.color; else t.fill = 'none';
-                if (sign === 'neg') t.opacity = 0.6;  // exports / pumping: same colour, lighter
+                if (filled && m.hatched) t.fillpattern = {{ shape: '/', fgcolor: 'white', size: 8, solidity: 0.3 }};
+                if (sign === 'neg' && !m.hatched) t.opacity = 0.6;  // exports: same colour, lighter
                 return t;
             }});
         }}
@@ -772,7 +821,8 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
                 else if (name === 'custom') displayCustomPlot(document.getElementById('customPlotSelect').value);
                 else if (name === 'explore') renderExplore();
             }} catch (error) {{
-                showError('Error loading data: ' + error.message);
+                console.error(error);
+                showError('Error loading data: ' + error.message, name);
             }}
         }}
 
@@ -960,22 +1010,360 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
             }});
         }}
 
-        function displayCustomPlot(plotName) {{
-            const plotData = networkData.custom_plots[plotName];
-            const view = document.getElementById('customPlotView');
+        // Custom plots are arbitrary Plotly figures that come and go, so nothing here depends on a particular plot:
+        // filters, units and the CSV export are derived from what each figure contains (trace names, bar
+        // categories, y-axis title), and anything that is not recognised is shown unchanged.
+        //  - Filters: when most trace names (or bar categories) are names of one component class, the plot gets
+        //    that class's filters (see CUSTOM_ATTR_FILTERS; Links and Buses get Nodes + Hydro Power Flow).
+        //    Traces that are not components (e.g. a 'Total' line) are always kept.
+        //  - Units: read from the y-axis title (MW, MWh or <currency>/MWh); otherwise the Unit buttons are disabled.
+        const CUSTOM_FILTER_CLASSES = ['Generator', 'Link', 'Bus', 'Load', 'StorageUnit', 'Store'];
+        const CUSTOM_ATTR_FILTERS = {{
+            Generator: [{{ attr: 'carrier', label: 'Carrier' }}, {{ attr: 'type', label: 'Type' }}, {{ attr: 'bus', label: 'Node(s)' }}],
+            Load: [{{ attr: 'bus', label: 'Node(s)' }}],
+            StorageUnit: [{{ attr: 'carrier', label: 'Carrier' }}, {{ attr: 'bus', label: 'Node(s)' }}],
+            Store: [{{ attr: 'carrier', label: 'Carrier' }}, {{ attr: 'bus', label: 'Node(s)' }}]
+        }};
+        const CUSTOM_NOUNS = {{ Generator: 'generators', Link: 'links', Bus: 'buses', Load: 'loads', StorageUnit: 'storage units', Store: 'stores' }};
+        const UNIT_PREFIXES = {{ k: 1e3, M: 1e6, G: 1e9, T: 1e12 }};
+        const UNIT_CHOICES = {{ power: ['k', 'M', 'G'], energy: ['k', 'M', 'G'], price: ['k', 'M'] }};
+        const customState = {{}};   // plot name -> {{ unit prefix, hydro: show hydro links / buses }}
+        const customMeta = {{}};    // plot name -> detected filter target and unit (computed once per plot)
+        let customExport = null;   // what the custom plot currently shows, for CSV download
+        const customFilterKey = name => '__custom|' + name;
 
-            if (!plotData) {{
+        function componentNameSet(componentType) {{
+            const staticData = (networkData.components[componentType] || {{}}).static || {{}};
+            const firstCol = Object.values(staticData)[0] || {{}};
+            return new Set(Object.keys(firstCol));
+        }}
+
+        // Category values of a bar trace (x for vertical bars, y for horizontal ones)
+        function barCategories(t) {{
+            const cats = t.orientation === 'h' ? t.y : t.x;
+            return Array.isArray(cats) ? cats.map(String) : [];
+        }}
+
+        // Which component class a plot shows, and whether per trace ('traces') or per bar category ('categories')
+        function detectCustomTarget(plot) {{
+            const traces = plot.data;
+            const traceNames = traces.map(t => t.name).filter(n => n !== undefined && n !== null).map(String);
+            const allBars = traces.length > 0 && traces.every(t => t.type === 'bar');
+            const categories = allBars ? [...new Set(traces.flatMap(barCategories))] : [];
+            let best = null;
+            CUSTOM_FILTER_CLASSES.forEach(cls => {{
+                const componentType = (networkData.component_classes || {{}})[cls];
+                if (!componentType || !networkData.components[componentType]) return;
+                const names = componentNameSet(componentType);
+                [['traces', traceNames], ['categories', categories]].forEach(([mode, list]) => {{
+                    if (!list.length) return;
+                    const hits = list.filter(n => names.has(n)).length;
+                    // At least half of the names must be components; earlier classes win ties
+                    if (hits && hits / list.length >= 0.5 && (!best || hits > best.hits)) {{
+                        best = {{ cls, componentType, mode, hits, names }};
+                    }}
+                }});
+            }});
+            return best;
+        }}
+
+        function axisTitleText(axis) {{
+            if (!axis || axis.title === undefined || axis.title === null) return '';
+            return String(typeof axis.title === 'object' ? (axis.title.text || '') : axis.title);
+        }}
+
+        // Unit of the y-axis from its title: '<currency>/MWh' (price), 'MWh' (energy) or 'MW' (power), any SI prefix
+        function detectCustomUnit(layout) {{
+            const text = axisTitleText(layout.yaxis);
+            let m = text.match(/([^\\s\\/()\\[\\]]*)\\s*\\/\\s*([kMGT])Wh\\b/);
+            if (m) return {{ kind: 'price', prefix: m[2], currency: m[1], match: m[0] }};
+            m = text.match(/\\b([kMGT])Wh\\b/);
+            if (m) return {{ kind: 'energy', prefix: m[1], match: m[0] }};
+            m = text.match(/\\b([kMGT])W\\b/);
+            if (m) return {{ kind: 'power', prefix: m[1], match: m[0] }};
+            return null;
+        }}
+
+        function unitLabel(unit, prefix) {{
+            if (unit.kind === 'price') return `${{unit.currency}}/${{prefix}}Wh`;
+            return prefix + (unit.kind === 'energy' ? 'Wh' : 'W');
+        }}
+
+        function customPlotMeta(plotName) {{
+            if (!customMeta[plotName]) {{
+                const raw = networkData.custom_plots[plotName];
+                // Tolerate figures without data / layout
+                const plot = {{ data: Array.isArray(raw.data) ? raw.data : [], layout: raw.layout || {{}} }};
+                customMeta[plotName] = {{ plot, target: detectCustomTarget(plot), unit: detectCustomUnit(plot.layout) }};
+            }}
+            return customMeta[plotName];
+        }}
+
+        // Buses of a link at every port (bus0, bus1, bus2, ...), skipping empty ports
+        function linkBusesOf(componentType) {{
+            const staticData = networkData.components[componentType].static;
+            const busAttrs = Object.keys(staticData).filter(a => /^bus\\d+$/.test(a));
+            return name => busAttrs.map(a => staticData[a][name]).filter(b => b && b !== 'nan' && b !== 'None');
+        }}
+
+        // Selected components of a Link / Bus plot: Nodes picker (non-hydro buses) plus the Hydro Power Flow toggle.
+        // Links: those connected at any port to a selected node (All = every link); hydro links (a port on a hydro
+        // bus) only while the toggle is on. Buses: the selected nodes, plus - while the toggle is on - the hydro
+        // buses linked to them (all hydro buses when no node is picked).
+        function nodeFilterSelection(target, key, st, plotNames) {{
+            const hydroBuses = new Set(networkData.hydro_buses || []);
+            const selected = activeFilters[key] = activeFilters[key] || {{}};
+            const linksType = (networkData.component_classes || {{}}).Link;
+            const linkBuses = linksType && networkData.components[linksType] ? linkBusesOf(linksType) : () => [];
+            let nodeOptions, isHydro, allowed;
+            if (target.cls === 'Link') {{
+                isHydro = n => linkBuses(n).some(b => hydroBuses.has(b));
+                nodeOptions = [...new Set(plotNames.flatMap(linkBuses).filter(b => !hydroBuses.has(b)))].sort();
+            }} else {{
+                isHydro = n => hydroBuses.has(n);
+                nodeOptions = plotNames.filter(n => !isHydro(n)).sort();
+            }}
+            selected.bus = (selected.bus || []).filter(v => nodeOptions.includes(v));
+            const picked = new Set(selected.bus);
+            if (target.cls === 'Link') {{
+                allowed = plotNames.filter(n => (st.hydro || !isHydro(n))
+                    && (!picked.size || linkBuses(n).some(b => picked.has(b))));
+            }} else {{
+                const linkNames = linksType && networkData.components[linksType] ? [...componentNameSet(linksType)] : [];
+                const nearPicked = new Set();
+                linkNames.forEach(l => {{
+                    const buses = linkBuses(l);
+                    if (buses.some(b => picked.has(b))) buses.forEach(b => nearPicked.add(b));
+                }});
+                allowed = plotNames.filter(n => isHydro(n)
+                    ? st.hydro && (!picked.size || nearPicked.has(n))
+                    : !picked.size || picked.has(n));
+            }}
+            return {{
+                allowed: new Set(allowed),
+                filterCfg: [{{ attr: 'bus', label: 'Node(s)', values: nodeOptions }}],
+                hydroCount: plotNames.filter(isHydro).length
+            }};
+        }}
+
+        function displayCustomPlot(plotName) {{
+            const view = document.getElementById('customPlotView');
+            if (!networkData.custom_plots || !networkData.custom_plots[plotName]) {{
                 view.innerHTML = '<div class="error-panel"><strong>Custom plot data not found</strong></div>';
                 return;
             }}
-
             view.innerHTML = `
-                <div class="info-panel"><h3>Custom Plot: ${{escapeHtml(plotName)}}</h3></div>
+                <div class="info-panel" id="customInfo"></div>
+                <div id="customControls"></div>
                 <div class="plot-container"><div id="customPlot" style="width:100%;height:600px;"></div></div>`;
+            refreshCustomPlot(plotName);
+        }}
 
-            Plotly.newPlot('customPlot', plotData.data, plotData.layout, {{
-                responsive: true, displayModeBar: true, displaylogo: false
+        function refreshCustomPlot(plotName) {{
+            try {{
+                renderCustomPlot(plotName);
+            }} catch (error) {{
+                // A figure this viewer does not understand must not break the page: fall back to the plain figure
+                console.error(error);
+                const {{ plot }} = customPlotMeta(plotName);
+                document.getElementById('customControls').innerHTML =
+                    `<div class="error-panel"><strong>Filters and units are unavailable for this plot:</strong> ${{escapeHtml(error.message)}}</div>`;
+                customExport = null;
+                try {{
+                    Plotly.newPlot('customPlot', plot.data, plot.layout, {{ responsive: true, displayModeBar: true, displaylogo: false }});
+                }} catch (plotError) {{
+                    showError('This plot could not be drawn: ' + plotError.message, 'custom');
+                }}
+            }}
+        }}
+
+        function renderCustomPlot(plotName) {{
+            const {{ plot, target, unit }} = customPlotMeta(plotName);
+            const key = customFilterKey(plotName);
+            const st = customState[plotName] = customState[plotName] || {{ unit: unit ? unit.prefix : null, hydro: true }};
+            const rerender = () => refreshCustomPlot(plotName);
+
+            // --- Filters: the set of component names to keep (null = keep everything)
+            let allowed = null, controls = '', bindings = [];
+            if (target) {{
+                const plotNames = target.mode === 'traces'
+                    ? [...new Set(plot.data.map(t => String(t.name)).filter(n => target.names.has(n)))]
+                    : [...new Set(plot.data.flatMap(barCategories).filter(n => target.names.has(n)))];
+                const noun = CUSTOM_NOUNS[target.cls];
+                if (target.cls === 'Link' || target.cls === 'Bus') {{
+                    const sel = nodeFilterSelection(target, key, st, plotNames);
+                    allowed = sel.allowed;
+                    const hydroLabel = target.cls === 'Link' ? 'hydro links' : 'hydro buses';
+                    controls += renderFilterBar(key, sel.filterCfg, plotNames.length, allowed.size, {{
+                        id: 'customNodeFilters', title: 'Nodes', noun,
+                        note: target.cls === 'Link'
+                            ? 'Shows the links connected to the selected node(s). p0 &gt; 0 means power flows from bus0 to bus1.'
+                            : 'Shows the selected node(s).'
+                    }});
+                    controls += `<div class="filter-bar" id="customHydroFilter">
+                        <div class="filter-title">Hydro Power Flow</div>
+                        <div class="control-group"><button type="button" class="toggle-btn${{st.hydro && sel.hydroCount ? ' active' : ''}}" id="customHydroToggle"
+                            ${{sel.hydroCount ? '' : 'disabled'}} title="Show or hide the ${{hydroLabel}}">${{st.hydro ? 'On' : 'Off'}}: ${{sel.hydroCount}} ${{hydroLabel}}</button></div>
+                        <div class="filter-note">${{sel.hydroCount
+                            ? `Hydro ${{target.cls === 'Link' ? 'links (a port on' : 'buses (names ending in'}} ${{escapeHtml((networkData.hydro_suffixes || []).join(', '))}}) are toggled on their own.
+                               With nodes selected, only the ${{hydroLabel}} connected to them are shown.`
+                            : `This plot has no ${{hydroLabel}}.`}}</div>
+                    </div>`;
+                    bindings.push(() => {{
+                        bindFilterBar(document.getElementById('customNodeFilters'), key, rerender, () => {{ st.hydro = true; }});
+                        const toggle = document.getElementById('customHydroToggle');
+                        toggle.addEventListener('click', () => {{ st.hydro = !st.hydro; rerender(); }});
+                    }});
+                }} else {{
+                    const cfg = CUSTOM_ATTR_FILTERS[target.cls].filter(f => networkData.components[target.componentType].static[f.attr]);
+                    if (cfg.length) {{
+                        // Cascading: Type only lists the types of the selected carrier(s), Node(s) those that remain
+                        const values = cascadeFilterValues(key, target.componentType, cfg, plotNames);
+                        const byName = Object.fromEntries(plotNames.map(n => [n, true]));
+                        allowed = new Set(Object.keys(applyAttributeFilters(key, target.componentType, cfg, byName)));
+                        controls += renderFilterBar(key, values, plotNames.length, allowed.size,
+                            {{ id: 'customAttrFilters', title: 'Filters', noun }});
+                        bindings.push(() => bindFilterBar(document.getElementById('customAttrFilters'), key, rerender));
+                    }}
+                }}
+            }}
+            const keepName = n => !allowed || !target.names.has(String(n)) || allowed.has(String(n));
+
+            // --- Units: scale y values of scatter / bar traces on the main y-axis
+            let factor = 1;
+            if (unit && st.unit !== unit.prefix) {{
+                const ratio = UNIT_PREFIXES[unit.prefix] / UNIT_PREFIXES[st.unit];
+                factor = unit.kind === 'price' ? 1 / ratio : ratio;
+            }}
+            const scalable = t => ['scatter', 'scattergl', 'bar', undefined].includes(t.type)
+                && t.orientation !== 'h' && (!t.yaxis || t.yaxis === 'y');
+            const scale = arr => Array.isArray(arr) ? arr.map(v => typeof v === 'number' ? v * factor : v) : arr;
+
+            const traces = [];
+            plot.data.forEach(t => {{
+                if (target && target.mode === 'traces' && !keepName(t.name)) return;
+                // Shallow copy: legend clicks set 'visible' on the plotted trace, never on the stored figure
+                let out = {{ ...t }};
+                if (target && target.mode === 'categories' && allowed) {{
+                    out = filterBarPoints(t, keepName);
+                }}
+                if (factor !== 1 && scalable(out)) out = {{ ...out, y: scale(out.y) }};
+                traces.push(out);
             }});
+
+            // Layout copy: unit in the y-axis title; zoom kept between filter changes, y-axis reset on unit change
+            const layout = JSON.parse(JSON.stringify(plot.layout));
+            layout.uirevision = plotName;
+            layout.xaxis = {{ ...(layout.xaxis || {{}}), uirevision: plotName }};
+            layout.yaxis = {{ ...(layout.yaxis || {{}}), uirevision: plotName + '|' + st.unit }};
+            const yTitle = axisTitleText(plot.layout.yaxis);
+            if (unit) {{
+                const title = yTitle.replace(unit.match, unitLabel(unit, st.unit));
+                layout.yaxis.title = {{ ...(typeof layout.yaxis.title === 'object' ? layout.yaxis.title : {{}}), text: title }};
+            }}
+            if (!traces.length) {{
+                layout.annotations = [...(layout.annotations || []), {{
+                    text: 'No series match the selected filters', xref: 'paper', yref: 'paper', x: 0.5, y: 0.5,
+                    showarrow: false, font: {{ size: 16, color: '#7f8c8d' }}
+                }}];
+            }}
+            customExport = {{ plotName, unitLabel: unit ? unitLabel(unit, st.unit) : '',
+                              xTitle: axisTitleText(layout.xaxis), yTitle: axisTitleText(layout.yaxis) }};
+
+            // --- Info panel
+            const detected = target
+                ? `Filters for <strong>${{escapeHtml(CUSTOM_NOUNS[target.cls])}}</strong> were detected from the ${{target.mode === 'traces' ? 'series names' : 'bar labels'}}.`
+                : 'No network components were recognised in this plot, so it has no filters.';
+            document.getElementById('customInfo').innerHTML = `
+                <h3>Custom Plot: ${{escapeHtml(plotName)}}</h3>
+                <p>${{detected}} ${{unit ? '' : 'The unit could not be read from the y-axis title, so it cannot be converted.'}}</p>`;
+
+            // --- Unit bar: Download on the left, unit selector on the right (as in Power Balance)
+            const unitChoices = unit ? UNIT_CHOICES[unit.kind].map(p => [p, unitLabel(unit, p)]) : [['', 'n/a']];
+            controls += `<div class="unit-bar">
+                <button type="button" class="toggle-btn" id="customDownload" title="Download the plotted series (current filters, unit and legend selection) as CSV">⬇ Download CSV</button>
+                <div class="unit-select" title="${{unit ? '' : 'Available when the y-axis title contains a unit such as MW, MWh or $/MWh'}}">
+                    <label class="control-label">Unit</label>
+                    <div class="button-group">${{optionButtons('customUnit', unitChoices, st.unit || '', !unit)}}</div>
+                </div>
+            </div>`;
+            const controlsDiv = document.getElementById('customControls');
+            controlsDiv.innerHTML = controls;
+            bindings.forEach(bind => bind());
+            controlsDiv.querySelectorAll('[data-option=customUnit]').forEach(btn => btn.addEventListener('click', function() {{
+                st.unit = this.dataset.value;
+                rerender();
+            }}));
+            document.getElementById('customDownload').addEventListener('click', downloadCustomCsv);
+
+            Plotly.react('customPlot', traces, layout, {{ responsive: true, displayModeBar: true, displaylogo: false }});
+        }}
+
+        // Copy of a bar trace keeping only the bars whose category passes keep(); per-bar arrays follow along
+        function filterBarPoints(t, keep) {{
+            const cats = t.orientation === 'h' ? t.y : t.x;
+            if (!Array.isArray(cats)) return t;
+            const mask = cats.map(c => keep(c));
+            const n = cats.length;
+            const pick = arr => Array.isArray(arr) && arr.length === n ? arr.filter((_, i) => mask[i]) : arr;
+            const out = {{ ...t }};
+            ['x', 'y', 'text', 'hovertext', 'customdata', 'ids', 'width', 'base', 'offset'].forEach(k => {{
+                if (k in out) out[k] = pick(out[k]);
+            }});
+            if (out.marker) {{
+                out.marker = {{ ...out.marker, color: pick(out.marker.color), opacity: pick(out.marker.opacity) }};
+                if (out.marker.color === undefined) delete out.marker.color;
+                if (out.marker.opacity === undefined) delete out.marker.opacity;
+            }}
+            return out;
+        }}
+
+        // Save what the custom plot shows (read from the plot itself, so traces hidden via the legend are skipped).
+        // One column per series when they share the same x values; otherwise one row per point.
+        function downloadCustomCsv() {{
+            const gd = document.getElementById('customPlot');
+            const traces = (gd && gd.data ? gd.data : []).filter(t => t.visible !== false && t.visible !== 'legendonly');
+            if (!customExport || traces.length === 0) {{
+                alert('Nothing to download: no series are shown.');
+                return;
+            }}
+            const unitSuffix = customExport.unitLabel ? ` [${{customExport.unitLabel}}]` : '';
+            const name = (t, i) => t.name !== undefined && t.name !== null && t.name !== '' ? String(t.name) : `trace ${{i + 1}}`;
+            const fileName = `${{slug(customExport.plotName) || 'custom_plot'}}${{customExport.unitLabel ? '_' + slug(customExport.unitLabel) : ''}}.csv`;
+            const xText = v => v instanceof Date ? v.toISOString() : v;
+
+            const pies = traces.filter(t => t.type === 'pie' && Array.isArray(t.values));
+            if (pies.length === traces.length) {{
+                const rows = pies.flatMap((t, i) => t.values.map((v, j) => [name(t, i), (t.labels || [])[j] ?? j, v]));
+                saveCsv(fileName, ['series', 'label', 'value'], rows);
+                return;
+            }}
+            // Grids (heatmap / contour): one row per cell
+            const grids = traces.filter(t => Array.isArray(t.z) && t.z.every(Array.isArray));
+            if (grids.length === traces.length) {{
+                const rows = grids.flatMap((t, i) => t.z.flatMap((row, r) => row.map((z, c) =>
+                    [name(t, i), xText(Array.isArray(t.x) ? t.x[c] : c), Array.isArray(t.y) ? t.y[r] : r, z])));
+                saveCsv(fileName, ['series', 'x', 'y', 'z'], rows);
+                return;
+            }}
+            const xy = traces.filter(t => Array.isArray(t.x) || Array.isArray(t.y));
+            if (xy.length === 0) {{
+                alert('This plot type cannot be exported to CSV.');
+                return;
+            }}
+            // x / y of a trace; a missing one is the point index (as Plotly draws it)
+            const xs = t => Array.isArray(t.x) ? t.x : t.y.map((_, i) => i);
+            const ys = t => Array.isArray(t.y) ? t.y : t.x.map((_, i) => i);
+            const xKey = t => JSON.stringify(xs(t).map(xText));
+            const xLabel = customExport.xTitle || 'x';
+            if (xy.every(t => xKey(t) === xKey(xy[0]))) {{
+                const header = [xLabel, ...xy.map((t, i) => name(t, i) + unitSuffix)];
+                const rows = xs(xy[0]).map((x, j) => [xText(x), ...xy.map(t => ys(t)[j])]);
+                saveCsv(fileName, header, rows);
+            }} else {{
+                const rows = xy.flatMap((t, i) => xs(t).map((x, j) => [name(t, i), xText(x), ys(t)[j]]));
+                saveCsv(fileName, ['series', xLabel, (customExport.yTitle || 'y')], rows);
+            }}
         }}
 
         // --- Network Explore tab: the map produced by n.explore(), embedded in an iframe ---------
@@ -1379,8 +1767,10 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
             const nodeOptions = balance.buses.filter(b => !hydro.has(b)).sort();
             const pickedNodes = (activeFilters[BALANCE_NODE_FILTERS] || {{}}).bus || [];
             const nodes = new Set(pickedNodes.length ? pickedNodes : nodeOptions);
-            // Splitting generation / imports by bus is meaningless for a single node: the option is hidden and ignored
-            const multiNode = nodes.size > 1;
+            // Split by Bus is only offered when more than one node is explicitly selected (not for All,
+            // which would draw one line per bus of the whole network); otherwise it is hidden and ignored
+            const multiNode = pickedNodes.length > 1;
+            const loadSplit = state.loadSplit && multiNode;
             const genSplit = state.genSplit && multiNode;
             const importSplit = state.importSplit && multiNode;
 
@@ -1448,7 +1838,7 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
             const importBreakdown = isOn('imports') && state.showSources;
             if (genBreakdown) {{
                 const carrierEntry = (carrier, v) => add('carrier|' + carrier, v,
-                    {{ group: 'breakdown', label: carrier, color: carrierColor(carrier) }});
+                    {{ group: 'breakdown', label: carrier, color: carrierColor(carrier), hatched: carrier === HYDRO_PUMPING }});
                 if (genSeries) {{
                     Object.entries(groupSeries(genNames, genSeries, genCarrier, length))
                         .forEach(([carrier, v]) => carrierEntry(carrier, v));
@@ -1469,7 +1859,7 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
                 }});
             }}
             if (isOn('load')) {{
-                if (state.loadSplit) {{
+                if (loadSplit) {{
                     Object.entries(groupSeries(loadNames, loadSeries, loadBus, length))
                         .forEach(([bus, v]) => add('load|' + bus, v, {{ group: 'load', bus }}));
                 }} else {{
@@ -1508,7 +1898,11 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
                     - (storageTotal ? storageTotal[i] : 0));
                 add('mismatch|', mismatch, {{ group: 'mismatch' }});
             }}
-            const {{ timeIndex, timeStrings, seriesData, periodLabel }} = applyPeriodFilter(balance.time_index, raw);
+            const period = applyPeriodFilter(balance.time_index, raw);
+            const {{ periodLabel }} = period;
+            const range = applyTimeRange(period.timeIndex, period.timeStrings, period.seriesData, state.rangeStart, state.rangeEnd);
+            const {{ timeIndex, timeStrings, seriesData }} = range;
+            const spanDays = timeIndex.length > 1 ? (timeIndex[timeIndex.length - 1] - timeIndex[0]) / 86400000 : 0;
 
             // Consistent colour per bus across split load / generation / import lines
             const allBuses = [...new Set(Object.values(meta).map(m => m.bus).filter(b => b !== undefined))].sort();
@@ -1518,14 +1912,16 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
             const filled = state.stackStyle === 'filled';
             const exportColumns = [];
             // Object key order follows insertion, so breakdown areas are drawn first and lines stay on top
-            const traces = Object.entries(seriesData).flatMap(([key, values]) => {{
+            const groupRank = Object.fromEntries(BALANCE_GROUPS.map((g, i) => [g.key, i + 1]));
+            const drawn = Object.entries(seriesData).flatMap(([key, values]) => {{
                 const m = meta[key];
                 const y = values.map(v => v * scale);
                 if (m.group === 'breakdown') {{
                     exportColumns.push({{ name: m.label, values: y }});
                     return breakdownTraces(m, timeIndex, y, stacked, filled);
                 }}
-                const t = {{ x: timeIndex, y, type: 'scatter', mode: 'lines' }};
+                // legendrank keeps the legend in button order (Load first) whatever the drawing order
+                const t = {{ x: timeIndex, y, type: 'scatter', mode: 'lines', legendrank: groupRank[m.group] }};
                 if (m.bus !== undefined) t.legendgroup = m.bus;
                 if (m.group === 'load') {{
                     Object.assign(t, m.bus !== undefined
@@ -1547,6 +1943,9 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
                 exportColumns.push({{ name: t.name, values: y }});
                 return [t];
             }});
+            // Plotly draws later traces on top: move the Load line(s) to the end so they stay in the foreground
+            const isLoad = t => t.legendrank === groupRank.load;
+            const traces = [...drawn.filter(t => !isLoad(t)), ...drawn.filter(isLoad)];
             balanceExport = {{ timeStrings, unit: state.unit, periodLabel, columns: exportColumns }};
 
             // --- Info panel
@@ -1556,11 +1955,11 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
             document.getElementById('balanceInfo').innerHTML = `
                 <h3>Instructions${{periodLabel}}</h3>
                 <ol class="instructions">
-                    <li>Pick the node(s) to analyse in <strong>Nodes</strong> (All = the whole network).</li>
-                    <li>Switch plots on or off with the coloured buttons. Switching a plot on opens its options.</li>
+                    <li>Pick the node(s) to analyse in <strong>Nodes</strong> (All = the whole network). <strong>Reset Filters</strong> there returns to this starting view.</li>
+                    <li>All plots start switched off: switch them on with the coloured buttons. Switching a plot on opens its options.</li>
                     <li>Hover over a button for an explanation of what it shows.</li>
                     <li>Use <strong>Chart Style</strong> to break Generation down by carrier or Imports by source node, as lines or stacked areas.</li>
-                    <li>Choose the unit, and use <strong>Download CSV</strong> to save what is plotted.</li>
+                    <li>Narrow the <strong>Time Range</strong>, choose the unit, and use <strong>Download CSV</strong> to save what is plotted.</li>
                 </ol>
                 ${{notes.map(n => `<p><em>${{n}}</em></p>`).join('')}}`;
 
@@ -1576,7 +1975,7 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
             if (balance.loads) {{
                 panels.load = `<div class="filter-bar" id="balanceLoadOptions">
                     <div class="filter-title">Load options</div>
-                    ${{flagButton('loadSplit', 'Split by Bus')}}
+                    ${{multiNode ? flagButton('loadSplit', 'Split by Bus') : ''}}
                     <div class="filter-count">Showing ${{loadNames.length}} of ${{balance.loads.names.length}} loads</div>
                 </div>`;
             }}
@@ -1623,7 +2022,8 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
                     <label class="control-label">Breakdown</label>
                     <div class="button-group">
                         ${{breakdownButton('showCarriers', 'Generation by Carrier', isOn('generation'),
-                            'Split Generation into one series per carrier (switch Generation on to use).')}}
+                            'Split Generation into one series per carrier (switch Generation on to use). ' +
+                            `Over more than one month the plot slows down: a Time Range of at most ${{CARRIER_RECOMMENDED_MONTHS}} months is recommended.`)}}
                         ${{breakdownButton('showSources', 'Imports by Source Node', isOn('imports'),
                             'Split Imports into one series per node the power comes from (switch Imports on to use).')}}
                     </div>
@@ -1637,9 +2037,27 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
                     <div class="button-group">${{optionButtons('stackStyle', [['filled', 'Filled'], ['line', 'Line Only']], state.stackStyle, !anyBreakdown || !stacked)}}</div>
                 </div>
             </div>`;
-            // Directly above the plot: Download on the left, unit selector on the right (both always available)
+            // Generation by Carrier over more than a month: warn; beyond the recommended maximum, offer a one-click shorter range
+            if (genBreakdown && spanDays > CARRIER_WARN_DAYS) {{
+                const tooLong = spanDays > CARRIER_RECOMMENDED_MONTHS * 31;
+                controls += `<div class="warning-panel" id="balanceCarrierWarning">
+                    <span>⚠ <strong>Generation by Carrier</strong> is shown over ${{Math.round(spanDays)}} days. Beyond one month the plot
+                    starts slowing down (zoom, hover and redraws lag). ${{tooLong
+                        ? `Select a <strong>Time Range</strong> of at most ${{CARRIER_RECOMMENDED_MONTHS}} months to visualise the carrier breakdown.`
+                        : `The range is within the recommended maximum of ${{CARRIER_RECOMMENDED_MONTHS}} months.`}}</span>
+                    ${{tooLong ? `<button type="button" class="toggle-btn" id="balanceLimitRange">Show the first ${{CARRIER_RECOMMENDED_MONTHS}} months</button>` : ''}}
+                </div>`;
+            }}
+            // Directly above the plot: Download on the left, time range in the middle, unit selector on the right
             controls += `<div class="unit-bar">
-                <button type="button" class="toggle-btn" id="balanceDownload" title="Download the plotted series (current nodes, filters, period and unit) as CSV">⬇ Download CSV</button>
+                <button type="button" class="toggle-btn" id="balanceDownload" title="Download the plotted series (current nodes, filters, period, time range and unit) as CSV">⬇ Download CSV</button>
+                <div class="unit-select" id="balanceRange">
+                    <label class="control-label">Time Range</label>
+                    <input type="date" data-range="rangeStart" value="${{state.rangeStart}}" min="${{range.first}}" max="${{range.last}}" title="First day shown">
+                    <span>to</span>
+                    <input type="date" data-range="rangeEnd" value="${{state.rangeEnd}}" min="${{range.first}}" max="${{range.last}}" title="Last day shown (included)">
+                    <button type="button" class="link-btn" id="balanceFullRange" ${{state.rangeStart || state.rangeEnd ? '' : 'disabled'}}>Full range</button>
+                </div>
                 <div class="unit-select">
                     <label class="control-label">Unit</label>
                     <div class="button-group">${{optionButtons('unit', Object.keys(BALANCE_UNITS).map(u => [u, u]), state.unit, false)}}</div>
@@ -1662,25 +2080,99 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
                 refreshBalance();
             }}));
             document.getElementById('balanceDownload').addEventListener('click', downloadBalanceCsv);
-            // Resetting the nodes switches off every Split by Bus; resetting generator filters switches off the generation split
+            controlsDiv.querySelectorAll('[data-range]').forEach(input => input.addEventListener('change', function() {{
+                state[this.dataset.range] = this.value;
+                // Keep start <= end whichever input was changed
+                if (state.rangeStart && state.rangeEnd && state.rangeStart > state.rangeEnd) {{
+                    [state.rangeStart, state.rangeEnd] = [state.rangeEnd, state.rangeStart];
+                }}
+                refreshBalance();
+            }}));
+            document.getElementById('balanceFullRange').addEventListener('click', () => {{
+                state.rangeStart = state.rangeEnd = '';
+                refreshBalance();
+            }});
+            const limitRange = document.getElementById('balanceLimitRange');
+            if (limitRange) limitRange.addEventListener('click', () => {{
+                const start = timeIndex[0];
+                const end = new Date(start.getFullYear(), start.getMonth() + CARRIER_RECOMMENDED_MONTHS, start.getDate() - 1);
+                state.rangeStart = isoDay(start);
+                state.rangeEnd = isoDay(end);
+                refreshBalance();
+            }});
+            // Resetting the nodes returns to the default view (every plot off, no splits, breakdowns or generator
+            // filters); the unit and time range are display settings and are kept.
+            // Resetting generator filters switches off the generation split.
             bindFilterBar(document.getElementById('balanceNodeFilters'), BALANCE_NODE_FILTERS, refreshBalance, () => {{
-                state.loadSplit = state.genSplit = state.importSplit = false;
+                const {{ unit, rangeStart, rangeEnd }} = state;
+                Object.assign(state, balanceDefaults(), {{ unit, rangeStart, rangeEnd }});
+                delete activeFilters[BALANCE_GEN_FILTERS];
             }});
             const genBar = document.getElementById('balanceGenFilters');
             if (genBar && genBar.querySelector('.reset-filters')) {{
                 bindFilterBar(genBar, BALANCE_GEN_FILTERS, refreshBalance, () => {{ state.genSplit = false; }});
             }}
 
-            // --- Plot (react keeps the x-axis zoom between updates; the y-axis resets when the unit changes)
+            // --- Plot (react keeps the x-axis zoom between updates; the y-axis resets when the unit changes
+            // and the x-axis when the time range changes)
+            const emptyHint = traces.length ? [] : [{{
+                text: timeIndex.length ? 'Switch on Load, Generation or Imports above to plot them'
+                                        : 'No snapshots in the selected time range',
+                xref: 'paper', yref: 'paper', x: 0.5, y: 0.5, showarrow: false, font: {{ size: 16, color: '#7f8c8d' }}
+            }}];
             Plotly.react('balancePlot', traces, {{
                 title: `Power Balance${{periodLabel}}`,
-                xaxis: {{ title: 'Time', type: 'date', uirevision: 'balance' }},
+                xaxis: {{ title: 'Time', type: 'date', uirevision: `balance|${{state.rangeStart}}|${{state.rangeEnd}}` }},
                 yaxis: {{ title: state.unit, uirevision: state.unit, zeroline: true, zerolinecolor: '#7f8c8d' }},
+                annotations: emptyHint,
                 hovermode: 'x unified',
                 legend: {{ orientation: 'h', x: 0.5, xanchor: 'center', y: -0.2 }},
                 margin: {{ l: 80, r: 80, t: 80, b: 120 }},
                 uirevision: 'balance'
             }}, {{ responsive: true, displayModeBar: true, displaylogo: false }});
+        }}
+
+        // Local calendar day of a Date as 'YYYY-MM-DD' (the format of <input type="date">)
+        function isoDay(d) {{
+            return `${{d.getFullYear()}}-${{String(d.getMonth() + 1).padStart(2, '0')}}-${{String(d.getDate()).padStart(2, '0')}}`;
+        }}
+
+        // Restrict series to the days start..end ('YYYY-MM-DD', both included; '' = open-ended).
+        // Also returns the first / last day available, for the date inputs' bounds.
+        function applyTimeRange(timeIndex, timeStrings, seriesData, start, end) {{
+            const first = timeIndex.length ? isoDay(timeIndex[0]) : '';
+            const last = timeIndex.length ? isoDay(timeIndex[timeIndex.length - 1]) : '';
+            if (!start && !end) return {{ timeIndex, timeStrings, seriesData, first, last }};
+            const mask = timeIndex.map(t => {{
+                const day = isoDay(t);
+                return (!start || day >= start) && (!end || day <= end);
+            }});
+            const keep = arr => arr.filter((_, i) => mask[i]);
+            const filtered = {{}};
+            Object.entries(seriesData).forEach(([k, v]) => {{ filtered[k] = v ? keep(v) : v; }});
+            return {{ timeIndex: keep(timeIndex), timeStrings: keep(timeStrings), seriesData: filtered, first, last }};
+        }}
+
+        // Save rows (arrays of cells) under a header row as a CSV file
+        function saveCsv(fileName, header, rows) {{
+            const csvCell = v => {{
+                const s = v === null || v === undefined ? '' : String(v);
+                return /[",\\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+            }};
+            const lines = [header, ...rows].map(r => r.map(csvCell).join(','));
+            const blob = new Blob([lines.join('\\n')], {{ type: 'text/csv;charset=utf-8' }});
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = fileName;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(a.href);
+        }}
+
+        // Filename-safe version of a label
+        function slug(text) {{
+            return String(text).replace(/[^0-9A-Za-z]+/g, '_').replace(/^_|_$/g, '');
         }}
 
         // Save the series currently shown in the Power Balance plot as a CSV file
@@ -1689,30 +2181,19 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
                 alert('Nothing to download: switch at least one plot on.');
                 return;
             }}
-            const csvCell = v => {{
-                const s = String(v);
-                return /[",\\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
-            }};
             const {{ timeStrings, unit, columns }} = balanceExport;
             const header = ['snapshot', ...columns.map(c => `${{c.name}} [${{unit}}]`)];
-            const lines = [header.map(csvCell).join(',')];
-            timeStrings.forEach((t, i) => {{
-                lines.push([t, ...columns.map(c => c.values[i])].map(csvCell).join(','));
-            }});
-            const period = balanceExport.periodLabel.replace(/[^0-9A-Za-z]+/g, '_').replace(/^_|_$/g, '');
-            const blob = new Blob([lines.join('\\n')], {{ type: 'text/csv;charset=utf-8' }});
-            const a = document.createElement('a');
-            a.href = URL.createObjectURL(blob);
-            a.download = `power_balance${{period ? '_' + period : ''}}_${{unit}}.csv`;
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
-            URL.revokeObjectURL(a.href);
+            const rows = timeStrings.map((t, i) => [t, ...columns.map(c => c.values[i])]);
+            const period = slug(balanceExport.periodLabel);
+            saveCsv(`power_balance${{period ? '_' + period : ''}}_${{unit}}.csv`, header, rows);
         }}
 
-        function showError(message) {{
-            document.getElementById('contentDisplay').innerHTML =
-                `<div class="error-panel"><strong>Error:</strong> ${{message}}</div>`;
+        // Show an error in the view of the tab it came from
+        const TAB_VIEWS = {{ summary: 'networkDetails', balance: 'balanceView', components: 'contentDisplay',
+                            custom: 'customPlotView', explore: 'exploreView' }};
+        function showError(message, tab) {{
+            const view = document.getElementById(TAB_VIEWS[tab || activeTab] || 'contentDisplay');
+            if (view) view.innerHTML = `<div class="error-panel"><strong>Error:</strong> ${{escapeHtml(message)}}</div>`;
         }}
     </script>
 </body>
@@ -1743,12 +2224,20 @@ def _decode_binary_arrays(obj):
         "i1": "<i1", "u1": "<u1",
         "i2": "<i2", "u2": "<u2",
         "i4": "<i4", "u4": "<u4",
+        "i8": "<i8", "u8": "<u8",
     }
     if isinstance(obj, dict):
         if "bdata" in obj and "dtype" in obj:
             raw = base64.b64decode(obj["bdata"])
             dt = _dtype_map.get(obj["dtype"], "<f8")
-            return np.frombuffer(raw, dtype=dt).tolist()
+            arr = np.frombuffer(raw, dtype=dt)
+            # 2-D data (e.g. heatmap z) carries its shape as "rows, cols"
+            shape = obj.get("shape")
+            if shape:
+                if isinstance(shape, str):
+                    shape = [int(s) for s in shape.split(',') if s.strip()]
+                arr = arr.reshape(tuple(shape))
+            return arr.tolist()
         return {k: _decode_binary_arrays(v) for k, v in obj.items()}
     elif isinstance(obj, list):
         return [_decode_binary_arrays(v) for v in obj]
@@ -1861,6 +2350,9 @@ def _extract_component_info(network, currency='$', custom_plots=None):
             }
 
     # --- Power balance and carrier colours ------------------------------------
+    # Hydro buses are also used by the Custom Plots filters, which work without the balance data
+    component_info['hydro_buses'] = _hydro_buses(network)
+    component_info['hydro_suffixes'] = list(HYDRO_BUS_SUFFIXES)
     component_info['balance'] = _extract_balance(network, snapshot_time_index)
     component_info['carrier_colors'] = _extract_carrier_colors(network)
     component_info['explore'] = _extract_explore(network)
@@ -1905,31 +2397,66 @@ def _extract_component_info(network, currency='$', custom_plots=None):
 
     # --- Custom plots ------------------------------------------------------
     if custom_plots is not None:
-        if isinstance(custom_plots, str):
-            plots = _load_custom_plots_from_file(custom_plots, network)
-        else:
-            plots = custom_plots
-
-        import plotly.io as pio
-        import json as _json
-
-        plot_names = []
-        for i, fig in enumerate(plots):
-            title_text = (
-                fig.layout.title.text
-                if fig.layout.title and fig.layout.title.text
-                else f"Plot {i + 1}"
-            )
-            plot_names.append(title_text)
-            fig_dict = _decode_binary_arrays(_json.loads(pio.to_json(fig)))
-            component_info['custom_plots'][title_text] = {
-                'data': fig_dict['data'],
-                'layout': fig_dict['layout']
-            }
-
+        plots_by_name, plot_names = _extract_custom_plots(custom_plots, network)
+        component_info['custom_plots'] = plots_by_name
         component_info['summary']['custom_plots'] = plot_names
 
     return component_info
+
+
+def _extract_custom_plots(custom_plots, network):
+    """
+    Convert the custom plots to plain Plotly JSON, keyed by a unique display name.
+
+    Custom plots change often, so a single bad entry must not stop the export: a file
+    that cannot be loaded, or a figure that cannot be converted, is skipped with a
+    warning. Accepts a file path, a single figure, or a list of figures / figure dicts.
+    Duplicate titles get a numbered suffix instead of overwriting each other.
+
+    Returns (plots_by_name, ordered_names).
+    """
+    import warnings
+
+    import plotly.graph_objects as go
+    import plotly.io as pio
+
+    if isinstance(custom_plots, (str, os.PathLike)):
+        try:
+            plots = _load_custom_plots_from_file(custom_plots, network)
+        except Exception as e:
+            warnings.warn(f"Custom plots skipped, '{custom_plots}' could not be loaded: {type(e).__name__}: {e}")
+            return {}, []
+    else:
+        plots = custom_plots
+    if plots is None:
+        plots = []
+    elif isinstance(plots, (go.Figure, dict)):
+        plots = [plots]
+
+    by_name, names = {}, []
+    for i, fig in enumerate(plots):
+        if fig is None:
+            continue
+        try:
+            if not isinstance(fig, go.Figure):
+                fig = go.Figure(fig)
+            fig_dict = _decode_binary_arrays(json.loads(pio.to_json(fig)))
+        except Exception as e:
+            reason = next((line.strip() for line in str(e).splitlines() if line.strip()), '')
+            warnings.warn(f"Custom plot {i + 1} skipped, it is not a valid Plotly figure "
+                          f"({type(e).__name__}: {reason[:200]})")
+            continue
+
+        title = fig.layout.title.text if fig.layout.title and fig.layout.title.text else ''
+        # The name labels the plot selector: drop any HTML markup used for styling the title
+        name = re.sub(r'<[^>]*>', '', str(title)).strip() or f"Plot {i + 1}"
+        base, n = name, 2
+        while name in by_name:
+            name = f"{base} ({n})"
+            n += 1
+        by_name[name] = {'data': fig_dict.get('data') or [], 'layout': fig_dict.get('layout') or {}}
+        names.append(name)
+    return by_name, names
 
 
 def _dense_attribute(comp, attr, snapshots):
@@ -2024,9 +2551,8 @@ def _extract_balance(network, time_index):
     }
 
     if buses is not None and not buses.static.empty:
-        suffixes = tuple(s.lower() for s in HYDRO_BUS_SUFFIXES)
         balance['buses'] = [str(b) for b in buses.static.index]
-        balance['hydro_buses'] = [b for b in balance['buses'] if b.strip().lower().endswith(suffixes)]
+        balance['hydro_buses'] = _hydro_buses(network)
 
     # Link flows at every port (bus0, bus1, bus2, ...) for the Imports view
     if links is not None and not links.static.empty and _has_results(links, 'p0'):
@@ -2059,6 +2585,15 @@ def _extract_balance(network, time_index):
     balance['storage'] = storage_entries or None
 
     return balance
+
+
+def _hydro_buses(network):
+    """Names of the hydro storage buses (name ends with one of HYDRO_BUS_SUFFIXES, case-insensitive)."""
+    buses = next((c for c in network.components.values() if getattr(c, 'name', '') == 'Bus'), None)
+    if buses is None or buses.static.empty:
+        return []
+    suffixes = tuple(s.lower() for s in HYDRO_BUS_SUFFIXES)
+    return [str(b) for b in buses.static.index if str(b).strip().lower().endswith(suffixes)]
 
 
 def _extract_explore(network):
