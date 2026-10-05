@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<!-- Page skeleton of the PyPSA Network Viewer. render.py replaces the __PNV_*__ placeholders. -->
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>__PNV_TITLE__</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.26.0/plotly.min.js"></script>
+    <style>
+__PNV_CSS__
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>__PNV_TITLE__</h1>
+            <p>Interactive exploration of PyPSA network components and timeseries data</p>
+        </div>
+
+        <!-- Top-level navigation; tabs without content (e.g. no custom plots) are hidden by JavaScript -->
+        <nav class="tab-bar">
+            <div class="tab-buttons" role="tablist">
+                <button type="button" class="tab-btn" data-tab="summary" role="tab">Network Summary</button>
+                <button type="button" class="tab-btn" data-tab="balance" role="tab">Power Balance</button>
+                <button type="button" class="tab-btn" data-tab="components" role="tab">Network Components</button>
+                <button type="button" class="tab-btn" data-tab="custom" role="tab">Custom Plots</button>
+                <button type="button" class="tab-btn" data-tab="explore" role="tab">Network Explore</button>
+            </div>
+            <div class="period-picker" id="yearGroup" style="display:none;">
+                <label class="control-label" for="yearSelect">Investment Period</label>
+                <select id="yearSelect">
+                    <option value="">All Periods</option>
+                </select>
+            </div>
+        </nav>
+
+        <section class="tab-panel" id="tab-summary">
+            <div id="networkSummary" class="network-summary"></div>
+            <div id="networkDetails"></div>
+        </section>
+
+        <section class="tab-panel" id="tab-balance">
+            <div class="content-area"><div id="balanceView"></div></div>
+        </section>
+
+        <section class="tab-panel" id="tab-components">
+            <div class="controls-section">
+                <div class="control-group">
+                    <label class="control-label" for="componentTypeSelect">Component Type</label>
+                    <select id="componentTypeSelect">
+                        <option value="">Select component type...</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <label class="control-label" for="dataTypeSelect">Data Type</label>
+                    <select id="dataTypeSelect" disabled>
+                        <option value="">Select data type...</option>
+                        <option value="static">Static Data</option>
+                        <option value="timeseries">Time Series</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <label class="control-label" for="timeseriesSelect">Time Series</label>
+                    <select id="timeseriesSelect" disabled>
+                        <option value="">Select timeseries...</option>
+                    </select>
+                </div>
+            </div>
+            <div class="content-area">
+                <div id="contentDisplay"></div>
+            </div>
+        </section>
+
+        <section class="tab-panel" id="tab-custom">
+            <div class="controls-section single">
+                <div class="control-group">
+                    <label class="control-label" for="customPlotSelect">Plot</label>
+                    <select id="customPlotSelect"></select>
+                </div>
+            </div>
+            <div class="content-area"><div id="customPlotView"></div></div>
+        </section>
+
+        <section class="tab-panel" id="tab-explore">
+            <div id="exploreView"></div>
+        </section>
+    </div>
+
+    <!-- Network data exported by Python, then the viewer's JS modules (templates/js/*.js), concatenated.
+         The data is a JS literal rather than JSON so that NaN / Infinity values stay valid. -->
+    <script>
+const networkData = __PNV_DATA__;
+    </script>
+    <script>
+__PNV_JS__
+    </script>
+</body>
+</html>

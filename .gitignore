@@ -21,6 +21,7 @@ env/
 
 # Generated HTML outputs
 *.html
+!pypsa_network_viewer/templates/page.html
 
 # Generated Excel outputs
 *.xlsx
