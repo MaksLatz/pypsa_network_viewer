@@ -1,5 +1,99 @@
 /* Styles of the PyPSA Network Viewer page (inlined into the generated HTML). */
 
+.tab-bar-right {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    padding-bottom: 8px;
+}
+.tab-bar-right .period-picker {
+    padding-bottom: 0;
+}
+
+/* --- Power Balance: controls in a left sidebar, plot on the right at full window height ------------ */
+.balance-layout {
+    display: grid;
+    grid-template-columns: minmax(300px, 380px) minmax(0, 1fr);
+    gap: 20px;
+    align-items: start;
+}
+/* The plot stays in view while the (longer) sidebar scrolls with the page */
+.balance-main {
+    position: sticky;
+    top: 10px;
+}
+.balance-main .plot-container {
+    margin-top: 0;
+}
+.balance-plot {
+    width: 100%;
+    height: calc(100vh - 40px);
+    min-height: 480px;
+}
+.balance-sidebar .filter-bar,
+.balance-sidebar .toggle-bar,
+.balance-sidebar .group-panel,
+.balance-sidebar .warning-panel {
+    margin-bottom: 12px;
+}
+.balance-sidebar .filter-bar {
+    padding: 12px;
+    gap: 10px;
+}
+/* Sidebar controls take the full width instead of sitting side by side */
+.balance-sidebar .control-group {
+    min-width: 0;
+    flex: 1 1 100%;
+}
+.balance-sidebar .multi-select-toggle {
+    max-width: none;
+}
+.balance-sidebar .filter-count {
+    padding-bottom: 0;
+}
+.balance-sidebar .button-group {
+    flex-wrap: wrap;
+}
+.balance-sidebar .toggle-bar .toggle-btn,
+.balance-sidebar .toggle-btn {
+    padding: 8px 12px;
+}
+.balance-help {
+    margin-bottom: 12px;
+    padding: 10px 15px;
+}
+.balance-help summary {
+    cursor: pointer;
+    font-weight: 600;
+    color: #2c3e50;
+}
+.balance-help .instructions {
+    margin-top: 8px;
+    font-size: 0.92em;
+}
+.balance-note {
+    margin: 0 0 12px 0;
+    color: #7a4a00;
+    font-size: 0.9em;
+}
+.range-inputs {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+}
+@media (max-width: 1100px) {
+    .balance-layout {
+        grid-template-columns: 1fr;
+    }
+    .balance-main {
+        position: static;
+    }
+    .balance-plot {
+        height: 600px;
+    }
+}
+
 body {
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
     margin: 0;

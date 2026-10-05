@@ -21,7 +21,10 @@ document.addEventListener('DOMContentLoaded', function() {
             yearSelect.value = networkData.summary.periods[0];
         }
     }
-    setupTabs();
+    // A page link with saved settings (see permalink.js) restores that view, including its tab
+    const linkTab = applyViewLink();
+    setupCopyViewLink();
+    setupTabs(linkTab);
 });
 
 // --- Tabs -----------------------------------------------------------------------
@@ -31,15 +34,16 @@ function tabAvailable(name) {
     return true;
 }
 
-function setupTabs() {
+// linkTab: tab from the page link; otherwise reopen the tab the viewer last used (per-browser convenience)
+function setupTabs(linkTab) {
     document.querySelectorAll('.tab-btn').forEach(btn => {
         if (!tabAvailable(btn.dataset.tab)) btn.style.display = 'none';
         btn.addEventListener('click', () => activateTab(btn.dataset.tab));
     });
-    // Reopen the tab the viewer last used (per-browser convenience only)
     let saved = null;
     try { saved = localStorage.getItem(TAB_STORAGE_KEY); } catch (e) {}
-    activateTab(saved && tabAvailable(saved) && document.getElementById('tab-' + saved) ? saved : 'summary');
+    const valid = tab => tab && tabAvailable(tab) && document.getElementById('tab-' + tab);
+    activateTab(valid(linkTab) ? linkTab : valid(saved) ? saved : 'summary');
 }
 
 function activateTab(name) {

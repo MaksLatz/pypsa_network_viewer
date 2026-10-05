@@ -26,11 +26,15 @@ __PNV_CSS__
                 <button type="button" class="tab-btn" data-tab="custom" role="tab">Custom Plots</button>
                 <button type="button" class="tab-btn" data-tab="explore" role="tab">Network Explore</button>
             </div>
-            <div class="period-picker" id="yearGroup" style="display:none;">
-                <label class="control-label" for="yearSelect">Investment Period</label>
-                <select id="yearSelect">
-                    <option value="">All Periods</option>
-                </select>
+            <div class="tab-bar-right">
+                <div class="period-picker" id="yearGroup" style="display:none;">
+                    <label class="control-label" for="yearSelect">Investment Period</label>
+                    <select id="yearSelect">
+                        <option value="">All Periods</option>
+                    </select>
+                </div>
+                <button type="button" class="link-btn" id="copyViewLink"
+                        title="Copy the page link: it reopens this tab with the current filters and settings">🔗 Copy link to this view</button>
             </div>
         </nav>
 

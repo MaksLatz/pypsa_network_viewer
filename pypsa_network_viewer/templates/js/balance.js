@@ -45,6 +45,9 @@ let balanceExport = null;  // what the Power Balance plot currently shows, for C
 // Hydro links take part in the Generation filters as pseudo-generators, one per direction and hydro type:
 // HYDRO_KEY_PREFIX + 'generation|Reservoir', with carrier Hydro Generation / Hydro Pumping and type Reservoir
 const HYDRO_KEY_PREFIX = '__hydro__|';
+// Generators with one of these carriers (lower case) are counted as Hydro Generation, by their 'type'
+// (e.g. run of river), together with the hydro links
+const HYDRO_GENERATOR_CARRIERS = ['hydro'];
 const isHydroKey = name => name.startsWith(HYDRO_KEY_PREFIX);
 const hydroKeyParts = key => {
     const [direction, ...type] = key.slice(HYDRO_KEY_PREFIX.length).split('|');
@@ -74,10 +77,10 @@ function breakdownTraces(m, x, y, stacked, filled) {
 }
 
 // Colour of a hydro breakdown series: the carrier colour of the hydro type if defined, else shades of
-// the hydro colour (one per type); pumping uses a darker shade of the same family, drawn hatched
-function hydroColor(direction, type, suffixes) {
+// the hydro colour (one per type, by position in `types`); pumping uses a darker shade, drawn hatched
+function hydroColor(direction, type, types) {
     const colors = networkData.carrier_colors || {};
-    const i = Math.max(0, suffixes.indexOf(type));
+    const i = Math.max(0, types.indexOf(type));
     const base = colors[type] || colors.hydro || HYDRO_COLOR;
     const shade = colors[type] ? 0 : [0, 0.35, -0.25, 0.6][i % 4];
     return direction === 'pumping' ? shadeColor(shadeColor(base, shade), -0.55) : shadeColor(base, shade);
@@ -210,10 +213,33 @@ function displayLoadGeneration() {
         return;
     }
 
+    // Controls in a left sidebar, the plot on the right at full window height (it stays in view while
+    // the sidebar scrolls). The instructions are rendered once so their open / closed state is kept.
+    const balance = networkData.balance;
+    const notes = [];
+    if (balance.load_source === 'p_set') notes.push('Load shows the p_set input (network has no optimised load results).');
+    if (!balance.generators) notes.push('Generation dispatch is unavailable — optimise the network to see generation.');
     contentDiv.innerHTML = `
-        <div class="info-panel" id="balanceInfo"></div>
-        <div id="balanceControls"></div>
-        <div class="plot-container"><div id="balancePlot" style="width:100%;height:600px;"></div></div>`;
+        <div class="balance-layout">
+            <aside class="balance-sidebar">
+                <details class="info-panel balance-help" id="balanceInfo">
+                    <summary>How to use</summary>
+                    <ol class="instructions">
+                        <li>Pick the node(s) to analyse in <strong>Nodes</strong> (All = the whole network). <strong>Reset Filters</strong> there returns to the starting view.</li>
+                        <li>All plots start switched off: switch them on with the coloured buttons. Switching a plot on opens its options.</li>
+                        <li>Hover over a button for an explanation of what it shows.</li>
+                        <li>Use <strong>Chart Style</strong> to break Generation down by carrier and hydro type, Imports by source node or Exports by destination node.</li>
+                        <li>Narrow the <strong>Time Range</strong>, choose the unit, and use <strong>Download CSV</strong> to save what is plotted.</li>
+                        <li>The page link (address bar) remembers these settings: bookmark or share it to reopen this view.</li>
+                    </ol>
+                </details>
+                ${notes.map(n => `<p class="balance-note"><em>${n}</em></p>`).join('')}
+                <div id="balanceControls"></div>
+            </aside>
+            <div class="balance-main">
+                <div class="plot-container"><div id="balancePlot" class="balance-plot"></div></div>
+            </div>
+        </div>`;
     currentData = { type: 'load_generation' };
     refreshBalance();
 }
@@ -277,9 +303,13 @@ function refreshBalance() {
     let genNames = genNodeNames;
     let hydroSelected = hydroKeys;
     let genFilterValues = [];
+    const genStatic = balance.generators ? networkData.components[balance.generators.component].static : {};
+    // Hydro generators (e.g. run of river) join Hydro Generation, typed by their own 'type' attribute
+    const isHydroGen = name => HYDRO_GENERATOR_CARRIERS.includes(String((genStatic.carrier || {})[name]).toLowerCase());
+    const hydroGenType = name => (genStatic.type || {})[name] || '';
     if (genCfg.length) {
-        const genStatic = networkData.components[balance.generators.component].static;
         const table = Object.fromEntries(genCfg.map(f => [f.attr, { ...genStatic[f.attr] }]));
+        if (table.carrier) genNodeNames.filter(isHydroGen).forEach(n => { table.carrier[n] = HYDRO_CARRIER; });
         hydroKeys.forEach(key => {
             const { direction, type } = hydroKeyParts(key);
             if (table.carrier) table.carrier[key] = direction === 'pumping' ? HYDRO_PUMPING : HYDRO_CARRIER;
@@ -320,20 +350,30 @@ function refreshBalance() {
     const importBreakdown = isOn('imports') && state.showSources;
     const exportBreakdown = isOn('exports') && state.showDestinations;
     if (genBreakdown) {
+        // One series per carrier; hydro (links and hydro generators) one series per direction and type,
+        // generators and links of the same type summed together
+        const hydroSeries = {};
+        hydroSelected.forEach(key => { hydroSeries[key] = links.hydro.series[key]; });
         if (genSeries) {
-            Object.entries(groupSeries(genNames, genSeries, genCarrier, length)).forEach(([carrier, v]) =>
-                add('carrier|' + carrier, v, { group: 'breakdown', label: carrier, color: carrierColor(carrier) }));
-        }
-        // Hydro generation types first, then pumping types
-        [...hydroSelected].sort((a, b) => hydroKeyParts(a).direction.localeCompare(hydroKeyParts(b).direction)).forEach(key => {
-            const { direction, type } = hydroKeyParts(key);
-            const pumping = direction === 'pumping';
-            add('carrier|' + key, links.hydro.series[key], {
-                group: 'breakdown', hatched: pumping,
-                label: `${pumping ? HYDRO_PUMPING : HYDRO_CARRIER} – ${type}`,
-                color: hydroColor(direction, type, balance.hydro_suffixes)
+            const groupOf = name => isHydroGen(name)
+                ? HYDRO_KEY_PREFIX + 'generation|' + (hydroGenType(name) || '(no type)') : genCarrier(name);
+            Object.entries(groupSeries(genNames, genSeries, groupOf, length)).forEach(([key, v]) => {
+                if (isHydroKey(key)) hydroSeries[key] = hydroSeries[key] ? addTo([...hydroSeries[key]], v) : v;
+                else add('carrier|' + key, v, { group: 'breakdown', label: key, color: carrierColor(key) });
             });
-        });
+        }
+        // Hydro generation types first, then pumping types; each type gets its own shade
+        const hydroTypes = [...new Set(Object.keys(hydroSeries).map(k => hydroKeyParts(k).type))].sort();
+        Object.keys(hydroSeries).sort((a, b) => hydroKeyParts(a).direction.localeCompare(hydroKeyParts(b).direction) || a.localeCompare(b))
+            .forEach(key => {
+                const { direction, type } = hydroKeyParts(key);
+                const pumping = direction === 'pumping';
+                add('carrier|' + key, hydroSeries[key], {
+                    group: 'breakdown', hatched: pumping,
+                    label: `${pumping ? HYDRO_PUMPING : HYDRO_CARRIER} – ${type}`,
+                    color: hydroColor(direction, type, hydroTypes)
+                });
+            });
     }
     if (importBreakdown) {
         Object.keys(links.imports.byNode).sort().forEach(src => add('source|' + src, links.imports.byNode[src],
@@ -435,22 +475,7 @@ function refreshBalance() {
     const traces = [...drawn.filter(t => !isLoad(t)), ...drawn.filter(isLoad)];
     balanceExport = { timeStrings, unit: state.unit, periodLabel, columns: exportColumns };
 
-    // --- Info panel
-    const notes = [];
-    if (balance.load_source === 'p_set') notes.push('Load shows the p_set input (network has no optimised load results).');
-    if (!balance.generators) notes.push('Generation dispatch is unavailable — optimise the network to see generation.');
-    document.getElementById('balanceInfo').innerHTML = `
-        <h3>Instructions${periodLabel}</h3>
-        <ol class="instructions">
-            <li>Pick the node(s) to analyse in <strong>Nodes</strong> (All = the whole network). <strong>Reset Filters</strong> there returns to this starting view.</li>
-            <li>All plots start switched off: switch them on with the coloured buttons. Switching a plot on opens its options.</li>
-            <li>Hover over a button for an explanation of what it shows.</li>
-            <li>Use <strong>Chart Style</strong> to break Generation down by carrier and hydro type, Imports by source node or Exports by destination node, as lines or stacked areas.</li>
-            <li>Narrow the <strong>Time Range</strong>, choose the unit, and use <strong>Download CSV</strong> to save what is plotted.</li>
-        </ol>
-        ${notes.map(n => `<p><em>${n}</em></p>`).join('')}`;
-
-    // --- Controls
+    // --- Controls (sidebar)
     const nodeBar = renderFilterBar(BALANCE_NODE_FILTERS,
         [{ attr: 'bus', label: 'Node(s)', values: nodeOptions }], nodeOptions.length, nodes.size,
         { id: 'balanceNodeFilters', title: 'Nodes', noun: 'nodes',
@@ -545,19 +570,24 @@ function refreshBalance() {
             ${tooLong ? `<button type="button" class="toggle-btn" id="balanceLimitRange">Show the first ${CARRIER_RECOMMENDED_MONTHS} months</button>` : ''}
         </div>`;
     }
-    // Directly above the plot: Download on the left, time range in the middle, unit selector on the right
-    controls += `<div class="unit-bar">
-        <button type="button" class="toggle-btn" id="balanceDownload" title="Download the plotted series (current nodes, filters, period, time range and unit) as CSV">⬇ Download CSV</button>
-        <div class="unit-select" id="balanceRange">
+    // View: time range, unit and CSV download
+    controls += `<div class="filter-bar" id="balanceViewOptions">
+        <div class="filter-title">View</div>
+        <div class="control-group" id="balanceRange">
             <label class="control-label">Time Range</label>
-            <input type="date" data-range="rangeStart" value="${state.rangeStart}" min="${range.first}" max="${range.last}" title="First day shown">
-            <span>to</span>
-            <input type="date" data-range="rangeEnd" value="${state.rangeEnd}" min="${range.first}" max="${range.last}" title="Last day shown (included)">
-            <button type="button" class="link-btn" id="balanceFullRange" ${state.rangeStart || state.rangeEnd ? '' : 'disabled'}>Full range</button>
+            <div class="range-inputs">
+                <input type="date" data-range="rangeStart" value="${state.rangeStart}" min="${range.first}" max="${range.last}" title="First day shown">
+                <span>to</span>
+                <input type="date" data-range="rangeEnd" value="${state.rangeEnd}" min="${range.first}" max="${range.last}" title="Last day shown (included)">
+                <button type="button" class="link-btn" id="balanceFullRange" ${state.rangeStart || state.rangeEnd ? '' : 'disabled'}>Full range</button>
+            </div>
         </div>
-        <div class="unit-select">
+        <div class="control-group">
             <label class="control-label">Unit</label>
             <div class="button-group">${optionButtons('unit', Object.keys(BALANCE_UNITS).map(u => [u, u]), state.unit, false)}</div>
+        </div>
+        <div class="control-group">
+            <button type="button" class="toggle-btn" id="balanceDownload" title="Download the plotted series (current nodes, filters, period, time range and unit) as CSV">⬇ Download CSV</button>
         </div>
     </div>`;
 
