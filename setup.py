@@ -15,6 +15,8 @@ setup(
     long_description=long_description,
     long_description_content_type="text/markdown",
     packages=find_packages(),
+    # The viewer page is assembled from these files at export time (see render.py)
+    package_data={"pypsa_network_viewer": ["templates/*.html", "templates/*.css", "templates/js/*.js"]},
     classifiers=[
         "Development Status :: 3 - Alpha",
         "Intended Audience :: Developers",
