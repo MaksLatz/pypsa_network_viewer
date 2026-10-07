@@ -412,8 +412,12 @@ function refreshBalance() {
             add('load|', sumSeries(loadNames, loadSeries, length), { group: 'load' });
         }
     }
+    // With a carrier picked, Split by Bus and the carrier breakdown on, the breakdown already shows the
+    // carrier per node ('ENS – AT00', ...): draw one total Generation line instead of one per node
+    const carrierPicked = ((activeFilters[BALANCE_GEN_FILTERS] || {}).carrier || []).length > 0;
+    const genSplitLines = genSplit && !(carrierPicked && genBreakdown);
     if (isOn('generation')) {
-        if (genSplit) {
+        if (genSplitLines) {
             const byBus = genSeries ? groupSeries(genNames, genSeries, genBus, length) : {};
             hydroSelected.forEach(key => Object.entries(links.hydro.byBus[key]).forEach(([bus, v]) => {
                 addTo(byBus[bus] = byBus[bus] || zerosFull(), v);
@@ -516,7 +520,7 @@ function refreshBalance() {
         const genOptions = { id: 'balanceGenFilters', title: 'Generation filters', noun: 'generators and hydro types',
             extraHtml: multiNode ? flagButton('genSplit', 'Split by Bus') : '',
             note: (multiNode ? '<strong>Split by Bus</strong> also splits the Generation by Carrier breakdown per node ' +
-                    '(e.g. pick one carrier to see which node it comes from). ' : '') +
+                    '(e.g. pick one carrier to see which node it comes from); with a carrier picked, Generation is then one total line. ' : '') +
                 (hydroKeys.length ? '<em>Hydro Generation</em> = links from hydro buses and hydro generators, <em>Hydro Pumping</em> = links to hydro buses (negative); ' +
                     'the Type of a hydro link is its hydro bus suffix.' : '') };
         panels.generation = genCfg.length

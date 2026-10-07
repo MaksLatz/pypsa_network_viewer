@@ -33,7 +33,7 @@ Also included: **`generate_template()`**, which creates a pre-configured Excel w
 ## Installation
 
 ```bash
-pip install git+https://github.com/PriyeshGosai/pypsa_network_viewer.git
+pip install git+https://github.com/MaksLatz/pypsa_network_viewer.git
 ```
 
 ## Quick Start
