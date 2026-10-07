@@ -1,5 +1,29 @@
 # Changelog
 
+## Version 0.3.0 (2026-10-07)
+
+### New Features
+- **Five tabs**: Network Summary, Power Balance, Network Components, Custom Plots, Network Explore
+- **Power Balance**: load, generation (by carrier and hydro type), imports / exports (by node), storage and
+  a mismatch check for any selection of nodes; Split by Bus (also per carrier), time range, units, CSV download
+- **Network Components**: multi-select filters (carrier, type, node), hydro bus toggle, unit conversion,
+  CSV download of tables and plots
+- **Custom Plots**: automatic filters and unit conversion for plots of network components
+- **Network Explore**: the `n.explore()` map, always included (the `explore` parameter is no longer needed)
+- **Save this view**: download a copy of the page that opens on the current view
+
+### Code Structure
+- `viewer.py` (html_network) + `extract/` (data) + `render.py` + `templates/` (HTML, CSS, JS modules)
+  replace the single `viewer_updated.py`; `viewer_updated.py` remains as an alias module
+- `html_viewer` is now an alias of `html_network` (the former `html_viewer` implementation was removed)
+- `generate_template` is imported on first use: the viewer no longer needs openpyxl
+
+### Repository Clean-up
+- Notebooks and `custom_plots_template.py` moved to `examples/`; the development notebook
+  `NetworkViewer.ipynb` moved to `archive/`
+- `EXAMPLE_USAGE.md` merged into `README.md`; duplicate `excel_template_generator copy.py` removed
+- `setup.py`: requires PyPSA >= 1.0 and pydeck; openpyxl as the `excel` extra
+
 ## Version 0.2.0 (2025-11-06)
 
 ### New Features

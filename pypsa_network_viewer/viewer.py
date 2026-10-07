@@ -5,10 +5,12 @@ Interactive HTML visualization for PyPSA networks
 Author: Priyesh Gosai
 
 Package layout:
-- viewer_updated.py : html_network(), the public entry point (this file)
+- viewer.py         : html_network(), the public entry point (this file)
 - extract/          : reads the network into JSON-serialisable data, one module per part of the page
 - render.py         : inlines templates/ (page.html, viewer.css, js/*.js) and the data into one HTML file
 - templates/        : the page's HTML skeleton, CSS and JavaScript modules
+- viewer_updated.py : former name of this module, kept for existing imports
+- excel_template_generator.py : generate_template(), an Excel workbook to define a new network (separate tool)
 """
 
 import os
@@ -49,7 +51,7 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
     custom_plots : str or list, optional
         Either a path to a Python file containing a ``get_plots(network)`` function that
         returns a list of Plotly figure objects, OR a list of Plotly figure objects directly.
-        See ``custom_plots_template.py`` for the expected file format.
+        See ``examples/custom_plots_template.py`` in the repository for the expected file format.
 
     Returns:
     --------

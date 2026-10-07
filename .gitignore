@@ -30,6 +30,9 @@ env/
 .vscode/
 .idea/
 
+# Claude Code local settings (per user)
+.claude/settings.local.json
+
 # OS
 .DS_Store
 Thumbs.db
