@@ -10,6 +10,13 @@ const FILTER_CONFIG = {
     Load: [
         { attr: 'bus', label: 'Bus (node)' }
     ],
+    // 'name' is the component's own name (see attributeTable): a bus is filtered by itself
+    Bus: [
+        { attr: 'name', label: 'Node(s)' }
+    ],
+    Store: [
+        { attr: 'bus', label: 'Node(s)' }
+    ],
     Link: [
         { attr: 'bus0', label: 'From bus (bus0)' },
         { attr: 'bus1', label: 'To bus (bus1)' }
@@ -29,15 +36,24 @@ const multiSelectScroll = {};
 function getFilterConfig(componentType) {
     const cfg = FILTER_CONFIG[getComponentClass(componentType)];
     if (!cfg) return null;
-    const staticData = networkData.components[componentType].static;
-    const available = cfg.filter(f => staticData[f.attr]);
+    const table = attributeTable(componentType);
+    const available = cfg.filter(f => table[f.attr]);
     return available.length > 0 ? available : null;
 }
 
 // Attribute table of a component ({ attr: { name: value } }). `source` is a component key, or already
-// a table, e.g. the Power Balance's mix of generators and hydro links.
+// a table, e.g. the Power Balance's mix of generators and hydro links. Component tables also get a
+// 'name' column (each component's own name), so e.g. buses can be filtered by name; the static data
+// itself is left unchanged.
+const attributeTables = {};
 function attributeTable(source) {
-    return typeof source === 'string' ? networkData.components[source].static : source;
+    if (typeof source !== 'string') return source;
+    if (!attributeTables[source]) {
+        const staticData = networkData.components[source].static;
+        const names = Object.keys(Object.values(staticData)[0] || {});
+        attributeTables[source] = { ...staticData, name: Object.fromEntries(names.map(n => [n, n])) };
+    }
+    return attributeTables[source];
 }
 
 // Keep entries of seriesData whose component matches the filters stored under stateKey.

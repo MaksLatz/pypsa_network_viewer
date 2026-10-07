@@ -32,6 +32,9 @@ def render_html(data, title):
     """Return the viewer page for ``data`` (from ``extract_network_data``) as an HTML string."""
     css = _template('viewer.css')
     js = '\n'.join(_template('js', name) for name in JS_MODULES)
+    # The JS is inlined in a <script> block: a literal closing tag would end it early (write '<\/script>')
+    if '</script' in js.lower():
+        raise ValueError("A JS module in templates/js contains '</script'; write it as '<\\/script>'")
     # '<\/' is valid JSON and stops embedded HTML (e.g. the explore map) from closing the <script> block
     data_json = json.dumps(data, default=str).replace('</', '<\\/')
 

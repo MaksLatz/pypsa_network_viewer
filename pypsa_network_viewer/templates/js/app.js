@@ -4,6 +4,7 @@ let activeTab = null;
 const TAB_STORAGE_KEY = 'pypsa-viewer-tab';
 
 document.addEventListener('DOMContentLoaded', function() {
+    capturePristinePage();  // before anything is drawn, for "Save this view"
     populateNetworkSummary();
     populateComponentTypes();
     populateCustomPlots();
@@ -21,9 +22,9 @@ document.addEventListener('DOMContentLoaded', function() {
             yearSelect.value = networkData.summary.periods[0];
         }
     }
-    // A page link with saved settings (see permalink.js) restores that view, including its tab
+    // A page link with saved settings, or a saved view (see permalink.js), restores that view and its tab
     const linkTab = applyViewLink();
-    setupCopyViewLink();
+    setupSaveView();
     setupTabs(linkTab);
 });
 

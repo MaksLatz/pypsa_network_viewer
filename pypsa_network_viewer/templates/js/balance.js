@@ -20,6 +20,8 @@ const BALANCE_UNITS = { kW: 1000, MW: 1, GW: 0.001 };
 // Generation by Carrier draws many stacked series: beyond this span the plot slows down
 const CARRIER_WARN_DAYS = 31;
 const CARRIER_RECOMMENDED_MONTHS = 2;
+// Split by Bus over more nodes than this shows a warning (one series per node, and per carrier)
+const SPLIT_WARN_NODES = 20;
 // Default view: every plot switched off. Reset Filters in the Nodes bar returns to it.
 const balanceDefaults = () => ({
     visible: { load: false, generation: false, imports: false, exports: false, storage: false, mismatch: false },
@@ -262,9 +264,9 @@ function refreshBalance() {
     const nodeOptions = balance.buses.filter(b => !hydroBusSet.has(b)).sort();
     const pickedNodes = (activeFilters[BALANCE_NODE_FILTERS] || {}).bus || [];
     const nodes = new Set(pickedNodes.length ? pickedNodes : nodeOptions);
-    // Split by Bus is only offered when more than one node is explicitly selected (not for All,
-    // which would draw one line per bus of the whole network); otherwise it is hidden and ignored
-    const multiNode = pickedNodes.length > 1;
+    // Split by Bus is offered whenever more than one node is in view (including All); for a single
+    // node it is hidden and ignored
+    const multiNode = nodes.size > 1;
     const loadSplit = state.loadSplit && multiNode;
     const genSplit = state.genSplit && multiNode;
     const importSplit = state.importSplit && multiNode;
@@ -351,29 +353,48 @@ function refreshBalance() {
     const exportBreakdown = isOn('exports') && state.showDestinations;
     if (genBreakdown) {
         // One series per carrier; hydro (links and hydro generators) one series per direction and type,
-        // generators and links of the same type summed together
-        const hydroSeries = {};
-        hydroSelected.forEach(key => { hydroSeries[key] = links.hydro.series[key]; });
+        // generators and links of the same type summed together. With Split by Bus: per carrier and node.
+        const SEP = '\u0002';  // separates carrier key and bus in a series key
+        const series = {};
+        const addSeries = (key, values) => { series[key] = series[key] ? addTo([...series[key]], values) : values; };
+        hydroSelected.forEach(key => {
+            if (genSplit) Object.entries(links.hydro.byBus[key]).forEach(([bus, v]) => addSeries(key + SEP + bus, v));
+            else addSeries(key, links.hydro.series[key]);
+        });
         if (genSeries) {
-            const groupOf = name => isHydroGen(name)
-                ? HYDRO_KEY_PREFIX + 'generation|' + (hydroGenType(name) || '(no type)') : genCarrier(name);
-            Object.entries(groupSeries(genNames, genSeries, groupOf, length)).forEach(([key, v]) => {
-                if (isHydroKey(key)) hydroSeries[key] = hydroSeries[key] ? addTo([...hydroSeries[key]], v) : v;
-                else add('carrier|' + key, v, { group: 'breakdown', label: key, color: carrierColor(key) });
-            });
+            const groupOf = name => (isHydroGen(name)
+                ? HYDRO_KEY_PREFIX + 'generation|' + (hydroGenType(name) || '(no type)') : genCarrier(name))
+                + (genSplit ? SEP + genBus(name) : '');
+            Object.entries(groupSeries(genNames, genSeries, groupOf, length)).forEach(([key, v]) => addSeries(key, v));
         }
-        // Hydro generation types first, then pumping types; each type gets its own shade
-        const hydroTypes = [...new Set(Object.keys(hydroSeries).map(k => hydroKeyParts(k).type))].sort();
-        Object.keys(hydroSeries).sort((a, b) => hydroKeyParts(a).direction.localeCompare(hydroKeyParts(b).direction) || a.localeCompare(b))
-            .forEach(key => {
-                const { direction, type } = hydroKeyParts(key);
-                const pumping = direction === 'pumping';
-                add('carrier|' + key, hydroSeries[key], {
-                    group: 'breakdown', hatched: pumping,
-                    label: `${pumping ? HYDRO_PUMPING : HYDRO_CARRIER} – ${type}`,
-                    color: hydroColor(direction, type, hydroTypes)
-                });
+        const parts = key => { const [carrierKey, bus] = key.split(SEP); return { carrierKey, bus }; };
+        // Order: carriers, then hydro generation types, then pumping types; nodes in order within each
+        const rank = k => !isHydroKey(k) ? 0 : hydroKeyParts(k).direction === 'generation' ? 1 : 2;
+        const keys = Object.keys(series).sort((a, b) => {
+            const pa = parts(a), pb = parts(b);
+            return rank(pa.carrierKey) - rank(pb.carrierKey) || pa.carrierKey.localeCompare(pb.carrierKey)
+                || String(pa.bus).localeCompare(String(pb.bus));
+        });
+        const hydroTypes = [...new Set(keys.map(k => parts(k).carrierKey).filter(isHydroKey).map(k => hydroKeyParts(k).type))].sort();
+        // Colours: carrier colour; per node, a shade of it - or, for a single carrier, one palette colour per node
+        const carrierKeys = new Set(keys.map(k => parts(k).carrierKey));
+        const splitBuses = [...new Set(keys.map(k => parts(k).bus).filter(b => b !== undefined))].sort();
+        const NODE_SHADES = [0, 0.35, -0.3, 0.55, -0.5, 0.2, -0.15, 0.7];
+        keys.forEach(key => {
+            const { carrierKey, bus } = parts(key);
+            const hydro = isHydroKey(carrierKey) ? hydroKeyParts(carrierKey) : null;
+            const pumping = !!hydro && hydro.direction === 'pumping';
+            const base = hydro ? `${pumping ? HYDRO_PUMPING : HYDRO_CARRIER} – ${hydro.type}` : carrierKey;
+            let color = hydro ? hydroColor(hydro.direction, hydro.type, hydroTypes) : carrierColor(carrierKey);
+            if (bus !== undefined) {
+                const i = splitBuses.indexOf(bus);
+                color = carrierKeys.size === 1 ? BUS_COLORS[i % BUS_COLORS.length] : shadeColor(color, NODE_SHADES[i % NODE_SHADES.length]);
+            }
+            add('carrier|' + key, series[key], {
+                group: 'breakdown', hatched: pumping, color,
+                label: bus !== undefined ? `${base} – ${bus}` : base
             });
+        });
     }
     if (importBreakdown) {
         Object.keys(links.imports.byNode).sort().forEach(src => add('source|' + src, links.imports.byNode[src],
@@ -494,8 +515,10 @@ function refreshBalance() {
     if (balance.generators) {
         const genOptions = { id: 'balanceGenFilters', title: 'Generation filters', noun: 'generators and hydro types',
             extraHtml: multiNode ? flagButton('genSplit', 'Split by Bus') : '',
-            note: hydroKeys.length ? '<em>Hydro Generation</em> = links from hydro buses, <em>Hydro Pumping</em> = links to hydro buses (negative); ' +
-                'the Type of a hydro link is its hydro bus suffix.' : '' };
+            note: (multiNode ? '<strong>Split by Bus</strong> also splits the Generation by Carrier breakdown per node ' +
+                    '(e.g. pick one carrier to see which node it comes from). ' : '') +
+                (hydroKeys.length ? '<em>Hydro Generation</em> = links from hydro buses and hydro generators, <em>Hydro Pumping</em> = links to hydro buses (negative); ' +
+                    'the Type of a hydro link is its hydro bus suffix.' : '') };
         panels.generation = genCfg.length
             ? renderFilterBar(BALANCE_GEN_FILTERS, genFilterValues,
                 balance.generators.names.length + hydroKeys.length, genNames.length + hydroSelected.length, genOptions)
@@ -559,6 +582,14 @@ function refreshBalance() {
             <div class="button-group">${optionButtons('stackStyle', [['filled', 'Filled'], ['line', 'Line Only']], state.stackStyle, !anyBreakdown || !stacked)}</div>
         </div>
     </div>`;
+    // Split by Bus over many nodes draws one series per node (and per carrier): warn, it slows the plot down
+    const splitOn = [loadSplit, genSplit, importSplit, exportSplit].some(Boolean);
+    if (splitOn && nodes.size > SPLIT_WARN_NODES) {
+        controls += `<div class="warning-panel" id="balanceSplitWarning">
+            <span>⚠ <strong>Split by Bus</strong> is on for ${nodes.size} nodes, which draws ${traces.length} series and slows the plot down.
+            Pick the nodes of interest in <strong>Nodes</strong> (e.g. with a carrier filter such as ENS, to see where it comes from).</span>
+        </div>`;
+    }
     // Generation by Carrier over more than a month: warn; beyond the recommended maximum, offer a one-click shorter range
     if (genBreakdown && spanDays > CARRIER_WARN_DAYS) {
         const tooLong = spanDays > CARRIER_RECOMMENDED_MONTHS * 31;
@@ -653,6 +684,7 @@ function refreshBalance() {
         yaxis: { title: state.unit, uirevision: state.unit, zeroline: true, zerolinecolor: '#7f8c8d' },
         annotations: emptyHint,
         hovermode: 'x unified',
+        hoverlabel: { namelength: -1 },  // full series names (Plotly cuts them at 15 characters by default)
         legend: { orientation: 'h', x: 0.5, xanchor: 'center', y: -0.2 },
         margin: { l: 80, r: 80, t: 80, b: 120 },
         uirevision: 'balance'

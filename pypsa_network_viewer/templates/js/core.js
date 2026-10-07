@@ -30,16 +30,56 @@ function hashColor(name) {
     return BUS_COLORS[hash % BUS_COLORS.length];
 }
 
-// Lighten (amount > 0) or darken (amount < 0) a '#rgb' / '#rrggbb' colour; other formats are returned as is
+// '#rrggbb' of any CSS colour ('red', 'rgb(...)', '#abc', ...), via the browser's own colour parser
+let colorProbe = null;
+function toHexColor(color) {
+    if (!colorProbe) colorProbe = document.createElement('canvas').getContext('2d');
+    colorProbe.fillStyle = '#000000';
+    colorProbe.fillStyle = String(color);
+    return colorProbe.fillStyle;  // '#rrggbb' for opaque colours, 'rgba(...)' otherwise
+}
+
+// Lighten (amount > 0) or darken (amount < 0) a colour; colours that are not opaque are returned as is
 function shadeColor(color, amount) {
+    if (!amount) return color;
     let hex = String(color).trim().replace('#', '');
     if (/^[0-9a-f]{3}$/i.test(hex)) hex = hex.split('').map(c => c + c).join('');
+    if (!/^[0-9a-f]{6}$/i.test(hex)) hex = toHexColor(color).replace('#', '');
     if (!/^[0-9a-f]{6}$/i.test(hex)) return color;
     const target = amount < 0 ? 0 : 255;
     return '#' + [0, 2, 4].map(i => {
         const c = parseInt(hex.slice(i, i + 2), 16);
         return Math.round(c + (target - c) * Math.abs(amount)).toString(16).padStart(2, '0');
     }).join('');
+}
+
+// --- Units (Power Balance, Network Components and Custom Plots) --------------------------------------
+// A unit is { kind: 'power' | 'energy' | 'price', prefix: 'k' | 'M' | 'G' | 'T', currency, match }.
+const UNIT_PREFIXES = { k: 1e3, M: 1e6, G: 1e9, T: 1e12 };
+const UNIT_CHOICES = { power: ['k', 'M', 'G'], energy: ['k', 'M', 'G', 'T'], price: ['k', 'M'] };
+
+// Unit found in a text such as an axis title or 'MW', 'MWh', '€/MWh' (any SI prefix); null if none
+function parseUnit(text) {
+    text = String(text || '');
+    let m = text.match(/([^\s\/()\[\]]*)\s*\/\s*([kMGT])Wh\b/);
+    if (m) return { kind: 'price', prefix: m[2], currency: m[1], match: m[0] };
+    m = text.match(/\b([kMGT])Wh\b/);
+    if (m) return { kind: 'energy', prefix: m[1], match: m[0] };
+    m = text.match(/\b([kMGT])W\b/);
+    if (m) return { kind: 'power', prefix: m[1], match: m[0] };
+    return null;
+}
+
+function unitLabel(unit, prefix) {
+    if (unit.kind === 'price') return `${unit.currency}/${prefix}Wh`;
+    return prefix + (unit.kind === 'energy' ? 'Wh' : 'W');
+}
+
+// Factor turning values in `unit` into values with the prefix `prefix` (prices scale the other way)
+function unitFactor(unit, prefix) {
+    if (!unit || !prefix || prefix === unit.prefix) return 1;
+    const ratio = UNIT_PREFIXES[unit.prefix] / UNIT_PREFIXES[prefix];
+    return unit.kind === 'price' ? 1 / ratio : ratio;
 }
 
 function escapeHtml(value) {

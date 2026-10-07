@@ -3,7 +3,8 @@
 // --- Network Components tab ---------------------------------------------------------
 function populateComponentTypes() {
     const select = document.getElementById('componentTypeSelect');
-    Object.keys(networkData.components).forEach(comp => {
+    // Global constraints get their own entry below (a formatted table), not the generic component one
+    Object.keys(networkData.components).filter(comp => comp !== 'global_constraints').forEach(comp => {
         const opt = document.createElement('option');
         opt.value = comp;
         opt.textContent = comp.charAt(0).toUpperCase() + comp.slice(1).replace(/_/g, ' ');
@@ -97,6 +98,12 @@ function renderComponentsView() {
 // Download CSV for whatever the tab shows: a function returning { fileName, header, rows }, called on click
 let componentsExport = null;
 
+// Display settings of the timeseries plots (kept when switching component or attribute, saved in the page link):
+// - showHydro: { componentType: true } shows the hydro buses / hydro links (hidden by default)
+// - units: chosen prefix per kind of unit, e.g. { power: 'G' } shows MW values in GW
+const HYDRO_TOGGLE_CLASSES = ['Bus', 'Link'];
+const componentsView = { showHydro: {}, units: {} };
+
 function componentsCsvBar(what) {
     return `<div class="unit-bar">
         <button type="button" class="toggle-btn" id="componentsDownload" title="Download ${escapeHtml(what)} as CSV">⬇ Download CSV</button>
@@ -180,20 +187,53 @@ function displayTimeseriesData(componentType, timeseriesName) {
     }
 
     let { timeIndex, timeStrings, seriesData, periodLabel } = applyPeriodFilter(data.time_index, data.data);
+    const rerender = () => displayTimeseriesData(componentType, timeseriesName);
+    const cls = getComponentClass(componentType);
 
-    // Attribute filters (carrier / type / bus for generators, bus0 / bus1 for links)
+    // Hydro buses (Buses) / links touching a hydro bus (Links): hidden unless the toggle is on.
+    // Applied first, so the node filters below only offer what can be shown.
+    let hydroCount = 0;
+    if (HYDRO_TOGGLE_CLASSES.includes(cls)) {
+        const isHydro = hydroSeriesTest(componentType, cls);
+        hydroCount = Object.keys(seriesData).filter(isHydro).length;
+        if (!componentsView.showHydro[componentType]) {
+            seriesData = Object.fromEntries(Object.entries(seriesData).filter(([n]) => !isHydro(n)));
+        }
+    }
+
+    // Attribute filters (carrier / type / bus for generators, bus0 / bus1 for links, node for buses / stores)
     const filterCfg = getFilterConfig(componentType);
-    const totalSeries = Object.keys(seriesData).length;
+    const totalSeries = Object.keys(data.data).length;
     let filterValues = null;
     if (filterCfg) {
         filterValues = cascadeFilterValues(componentType, componentType, filterCfg, Object.keys(seriesData));
         seriesData = applyAttributeFilters(componentType, componentType, filterCfg, seriesData);
     }
     const shownSeries = Object.keys(seriesData).length;
+    const hydroLabel = cls === 'Link' ? 'hydro links' : 'hydro buses';
+    const hydroButton = hydroCount
+        ? `<div class="control-group"><button type="button" class="toggle-btn${componentsView.showHydro[componentType] ? ' active' : ''}" id="componentsHydroToggle"
+              title="Show or hide the ${hydroLabel} (names ending in ${escapeHtml((networkData.hydro_suffixes || []).join(', '))})">
+              ${componentsView.showHydro[componentType] ? 'Shown' : 'Hidden'}: ${hydroCount} ${hydroLabel}</button></div>`
+        : '';
     const filterHtml = filterCfg
         ? renderFilterBar(componentType, filterValues, totalSeries, shownSeries,
-            { id: 'timeseriesFilters', note: FILTER_NOTES[getComponentClass(componentType)] })
+            { id: 'timeseriesFilters', note: FILTER_NOTES[cls], extraHtml: hydroButton })
         : '';
+
+    // Unit: MW / MWh / <currency>/MWh can be converted; anything else is shown as exported
+    const unit = parseUnit(data.unit);
+    const prefix = unit ? componentsView.units[unit.kind] || unit.prefix : null;
+    const factor = unitFactor(unit, prefix);
+    const shownUnit = unit ? data.unit.replace(unit.match, unitLabel(unit, prefix)) : (data.unit || 'Value');
+    const unitChoices = unit ? UNIT_CHOICES[unit.kind].map(p => [p, unitLabel(unit, p)]) : [['', 'n/a']];
+    const unitBar = `<div class="unit-bar">
+        <button type="button" class="toggle-btn" id="componentsDownload" title="Download the plotted series (current filters, period and unit) as CSV">⬇ Download CSV</button>
+        <div class="unit-select" title="${unit ? '' : 'Only MW, MWh and price (per MWh) values can be converted'}">
+            <label class="control-label">Unit</label>
+            <div class="button-group">${optionButtons('componentsUnit', unitChoices, prefix || '', !unit)}</div>
+        </div>
+    </div>`;
 
     contentDiv.innerHTML = `
         <div class="info-panel">
@@ -202,32 +242,40 @@ function displayTimeseriesData(componentType, timeseriesName) {
             <p><strong>Series:</strong> ${shownSeries} of ${totalSeries} with ${timeIndex.length} time steps shown</p>
         </div>
         ${filterHtml}
-        ${shownSeries === 0 ? '' : componentsCsvBar('the plotted series (current filters and period)')}
+        ${shownSeries === 0 ? '' : unitBar}
         <div class="plot-container">${shownSeries === 0
             ? '<div class="error-panel"><strong>No series match the selected filters.</strong></div>'
             : '<div id="timeseriesPlot" style="width:100%;height:600px;"></div>'}</div>`;
 
     currentData = { type: 'timeseries', componentType, timeseriesName, data };
-    if (filterCfg) {
-        bindFilterBar(document.getElementById('timeseriesFilters'), componentType,
-            () => displayTimeseriesData(componentType, timeseriesName));
-    }
+    if (filterCfg) bindFilterBar(document.getElementById('timeseriesFilters'), componentType, rerender);
+    const hydroToggle = document.getElementById('componentsHydroToggle');
+    if (hydroToggle) hydroToggle.addEventListener('click', () => {
+        componentsView.showHydro[componentType] = !componentsView.showHydro[componentType];
+        rerender();
+    });
     if (shownSeries === 0) return;
+    contentDiv.querySelectorAll('[data-option=componentsUnit]').forEach(btn => btn.addEventListener('click', function() {
+        componentsView.units[unit.kind] = this.dataset.value;
+        rerender();
+    }));
+
     const names = Object.keys(seriesData);
-    const unit = data.unit && data.unit !== 'Value' ? ` [${data.unit}]` : '';
+    const scaled = Object.fromEntries(names.map(n => [n, factor === 1 ? seriesData[n]
+        : seriesData[n].map(v => typeof v === 'number' ? v * factor : v)]));
     const period = slug(periodLabel);
     bindComponentsCsv(() => ({
         fileName: `${componentType}_${slug(timeseriesName)}${period ? '_' + period : ''}.csv`,
-        header: ['snapshot', ...names.map(n => n + unit)],
-        rows: timeStrings.map((t, i) => [t, ...names.map(n => seriesData[n][i])])
+        header: ['snapshot', ...names.map(n => n + (shownUnit !== 'Value' ? ` [${shownUnit}]` : ''))],
+        rows: timeStrings.map((t, i) => [t, ...names.map(n => scaled[n][i])])
     }));
 
     // Generators and storage are coloured by their carrier's static colour (when defined)
-    const carrierCol = CARRIER_COLORED_CLASSES.includes(getComponentClass(componentType))
+    const carrierCol = CARRIER_COLORED_CLASSES.includes(cls)
         ? networkData.components[componentType].static.carrier : null;
     const colors = networkData.carrier_colors || {};
-    const traces = Object.entries(seriesData).map(([name, values]) => {
-        const t = { x: timeIndex, y: values, type: 'scatter', mode: 'lines', name, line: { width: 2 } };
+    const traces = names.map(name => {
+        const t = { x: timeIndex, y: scaled[name], type: 'scatter', mode: 'lines', name, line: { width: 2 } };
         const carrier = carrierCol ? carrierCol[name] : undefined;
         if (carrier && colors[carrier]) t.line.color = colors[carrier];
         return t;
@@ -236,9 +284,19 @@ function displayTimeseriesData(componentType, timeseriesName) {
     Plotly.newPlot('timeseriesPlot', traces, {
         title: `${componentType} - ${timeseriesName}${periodLabel}`,
         xaxis: { title: 'Time', type: 'date' },
-        yaxis: { title: data.unit || 'Value' },
+        yaxis: { title: shownUnit },
         hovermode: 'x unified',
+        hoverlabel: { namelength: -1 },  // full series names (Plotly cuts them at 15 characters by default)
         legend: { orientation: 'h', x: 0.5, xanchor: 'center', y: -0.2 },
         margin: { l: 80, r: 80, t: 80, b: 120 }
     }, { responsive: true, displayModeBar: true, displaylogo: false });
+}
+
+// Test for the hydro series of a Bus (hydro bus) or Link (a port on a hydro bus) timeseries
+function hydroSeriesTest(componentType, cls) {
+    const hydroBuses = new Set(networkData.hydro_buses || []);
+    if (cls === 'Bus') return name => hydroBuses.has(name);
+    const staticData = networkData.components[componentType].static;
+    const busAttrs = Object.keys(staticData).filter(a => /^bus\d+$/.test(a));
+    return name => busAttrs.some(a => hydroBuses.has(staticData[a][name]));
 }

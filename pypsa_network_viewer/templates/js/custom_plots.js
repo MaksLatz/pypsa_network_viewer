@@ -26,8 +26,6 @@ const CUSTOM_ATTR_FILTERS = {
     Store: [{ attr: 'carrier', label: 'Carrier' }, { attr: 'bus', label: 'Node(s)' }]
 };
 const CUSTOM_NOUNS = { Generator: 'generators', Link: 'links', Bus: 'buses', Load: 'loads', StorageUnit: 'storage units', Store: 'stores' };
-const UNIT_PREFIXES = { k: 1e3, M: 1e6, G: 1e9, T: 1e12 };
-const UNIT_CHOICES = { power: ['k', 'M', 'G'], energy: ['k', 'M', 'G'], price: ['k', 'M'] };
 const customState = {};   // plot name -> { unit prefix, hydro: show hydro links / buses }
 const customMeta = {};    // plot name -> detected filter target and unit (computed once per plot)
 let customExport = null;   // what the custom plot currently shows, for CSV download
@@ -75,19 +73,7 @@ function axisTitleText(axis) {
 
 // Unit of the y-axis from its title: '<currency>/MWh' (price), 'MWh' (energy) or 'MW' (power), any SI prefix
 function detectCustomUnit(layout) {
-    const text = axisTitleText(layout.yaxis);
-    let m = text.match(/([^\s\/()\[\]]*)\s*\/\s*([kMGT])Wh\b/);
-    if (m) return { kind: 'price', prefix: m[2], currency: m[1], match: m[0] };
-    m = text.match(/\b([kMGT])Wh\b/);
-    if (m) return { kind: 'energy', prefix: m[1], match: m[0] };
-    m = text.match(/\b([kMGT])W\b/);
-    if (m) return { kind: 'power', prefix: m[1], match: m[0] };
-    return null;
-}
-
-function unitLabel(unit, prefix) {
-    if (unit.kind === 'price') return `${unit.currency}/${prefix}Wh`;
-    return prefix + (unit.kind === 'energy' ? 'Wh' : 'W');
+    return parseUnit(axisTitleText(layout.yaxis));
 }
 
 function customPlotMeta(plotName) {
@@ -231,11 +217,7 @@ function renderCustomPlot(plotName) {
     const keepName = n => !allowed || !target.names.has(String(n)) || allowed.has(String(n));
 
     // --- Units: scale y values of scatter / bar traces on the main y-axis
-    let factor = 1;
-    if (unit && st.unit !== unit.prefix) {
-        const ratio = UNIT_PREFIXES[unit.prefix] / UNIT_PREFIXES[st.unit];
-        factor = unit.kind === 'price' ? 1 / ratio : ratio;
-    }
+    const factor = unitFactor(unit, st.unit);
     const scalable = t => ['scatter', 'scattergl', 'bar', undefined].includes(t.type)
         && t.orientation !== 'h' && (!t.yaxis || t.yaxis === 'y');
     const scale = arr => Array.isArray(arr) ? arr.map(v => typeof v === 'number' ? v * factor : v) : arr;
@@ -255,6 +237,8 @@ function renderCustomPlot(plotName) {
     // Layout copy: unit in the y-axis title; zoom kept between filter changes, y-axis reset on unit change
     const layout = JSON.parse(JSON.stringify(plot.layout));
     layout.uirevision = plotName;
+    // Full series names in the hover box (Plotly cuts them at 15 characters by default)
+    layout.hoverlabel = { namelength: -1, ...(layout.hoverlabel || {}) };
     layout.xaxis = { ...(layout.xaxis || {}), uirevision: plotName };
     layout.yaxis = { ...(layout.yaxis || {}), uirevision: plotName + '|' + st.unit };
     const yTitle = axisTitleText(plot.layout.yaxis);
