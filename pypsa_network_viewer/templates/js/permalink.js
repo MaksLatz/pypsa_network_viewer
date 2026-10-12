@@ -15,7 +15,8 @@ function currentViewSettings() {
         balance: balanceState,
         components: {
             cards: componentsCards.map(c => ({ id: c.id, type: c.type, data: c.data, ts: c.ts,
-                                               showHydro: c.showHydro, units: c.units, threshold: c.threshold }))
+                                               showHydro: c.showHydro, units: c.units, threshold: c.threshold,
+                                               hideLegend: c.hideLegend }))
         },
         custom: { plot: value('customPlotSelect'), state: customState },
         statistics: statisticsState
@@ -112,7 +113,7 @@ function applyViewLink() {
                 });
                 addComponentsCard({ id: Number.isInteger(c.id) && c.id > 0 ? c.id : undefined,
                                     type: str(c.type), data: str(c.data), ts: str(c.ts),
-                                    showHydro, units, threshold: str(c.threshold) });
+                                    showHydro, units, threshold: str(c.threshold), hideLegend: c.hideLegend === true });
             });
         }
 

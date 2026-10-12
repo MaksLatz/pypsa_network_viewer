@@ -2,7 +2,9 @@
 // Time series selection, filters, unit and CSV download, and shows a static table, the global constraints
 // or a timeseries plot. The time axes of all timeseries plots are zoomed together.
 
-const HYDRO_TOGGLE_CLASSES = ['Bus', 'Link'];
+// Components with a hydro toggle: hydro buses, links touching a hydro bus, generators on a hydro bus
+const HYDRO_TOGGLE_CLASSES = ['Bus', 'Link', 'Generator'];
+const HYDRO_LABELS = { Bus: 'hydro buses', Link: 'hydro links', Generator: 'hydro generators' };
 // Cards in display order. Card settings (saved in the page link):
 // - type / data / ts: the selection; showHydro: { componentType: true } shows the hydro buses / links;
 // - units: chosen prefix per kind of unit, e.g. { power: 'G' }; threshold: minimum peak |value| ('' = off).
@@ -10,6 +12,8 @@ const HYDRO_TOGGLE_CLASSES = ['Bus', 'Link'];
 const componentsCards = [];
 let componentsCardSeq = 0;
 const cardFilterKey = (card, componentType) => `card${card.id}|${componentType}`;
+// Plots with more series than this get a Hide legend / Show legend button (card.hideLegend)
+const LEGEND_TOGGLE_MIN = 20;
 
 const titleCase = s => s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, ' ');
 
@@ -26,7 +30,7 @@ function addComponentsCard(init = {}) {
     const id = init.id || ++componentsCardSeq;
     componentsCardSeq = Math.max(componentsCardSeq, id);
     const card = {
-        id, type: '', data: '', ts: '', showHydro: {}, units: {}, threshold: '',
+        id, type: '', data: '', ts: '', showHydro: {}, units: {}, threshold: '', hideLegend: false,
         ...init
     };
     const root = document.createElement('div');
@@ -52,7 +56,11 @@ function addComponentsCard(init = {}) {
                     <select data-role="ts"><option value="">Select timeseries...</option></select>
                 </div>
             </div>
-            <button type="button" class="link-btn graph-card-remove" title="Remove this graph">✕ Remove</button>
+            <div class="graph-card-actions">
+                <button type="button" class="link-btn graph-card-move" data-move="-1" title="Move this graph up">▲ Up</button>
+                <button type="button" class="link-btn graph-card-move" data-move="1" title="Move this graph down">▼ Down</button>
+                <button type="button" class="link-btn graph-card-remove" title="Remove this graph">✕ Remove</button>
+            </div>
         </div>
         <div class="graph-card-info"></div>
         <div class="graph-card-controls"></div>
@@ -75,8 +83,25 @@ function addComponentsCard(init = {}) {
     card.el.data.addEventListener('change', () => { card.data = card.el.data.value; syncCardSelects(card); renderCard(card); });
     card.el.ts.addEventListener('change', () => { card.ts = card.el.ts.value; renderCard(card); });
     root.querySelector('.graph-card-remove').addEventListener('click', () => removeComponentsCard(card));
+    root.querySelectorAll('.graph-card-move').forEach(btn =>
+        btn.addEventListener('click', () => moveComponentsCard(card, Number(btn.dataset.move))));
     updateRemoveButtons();
     return card;
+}
+
+// Move a card one place up (-1) or down (+1). Only the page elements are reordered: the plots are not
+// redrawn, so this is instant whatever the size of the graphs.
+function moveComponentsCard(card, step) {
+    const i = componentsCards.indexOf(card);
+    const j = i + step;
+    if (j < 0 || j >= componentsCards.length) return;
+    const other = componentsCards[j];
+    [componentsCards[i], componentsCards[j]] = [other, card];
+    const container = card.root.parentNode;
+    if (step < 0) container.insertBefore(card.root, other.root);
+    else container.insertBefore(other.root, card.root);
+    updateRemoveButtons();
+    card.root.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 function removeComponentsCard(card) {
@@ -88,8 +113,14 @@ function removeComponentsCard(card) {
     updateRemoveButtons();
 }
 
+// Remove / Up / Down only where they apply (one card: none; first card: no Up; last card: no Down)
 function updateRemoveButtons() {
-    componentsCards.forEach(c => { c.root.querySelector('.graph-card-remove').style.display = componentsCards.length > 1 ? '' : 'none'; });
+    const several = componentsCards.length > 1;
+    componentsCards.forEach((c, i) => {
+        c.root.querySelector('.graph-card-remove').style.display = several ? '' : 'none';
+        c.root.querySelector('[data-move="-1"]').style.display = several && i > 0 ? '' : 'none';
+        c.root.querySelector('[data-move="1"]').style.display = several && i < componentsCards.length - 1 ? '' : 'none';
+    });
 }
 
 // Make the dropdowns show the card's selection. The data type (and timeseries, when available) is kept
@@ -274,10 +305,11 @@ function displayTimeseriesData(card, componentType, timeseriesName) {
     }
     const shownSeries = Object.keys(seriesData).length;
 
-    const hydroLabel = cls === 'Link' ? 'hydro links' : 'hydro buses';
+    const hydroLabel = HYDRO_LABELS[cls];
+    const hydroWhere = cls === 'Generator' ? 'connected to a hydro bus' : cls === 'Link' ? 'with a port on a hydro bus' : '';
     const hydroButton = hydroCount
         ? `<div class="control-group"><button type="button" class="toggle-btn${card.showHydro[componentType] ? ' active' : ''}" data-card-action="hydro"
-              title="Show or hide the ${hydroLabel} (names ending in ${escapeHtml((networkData.hydro_suffixes || []).join(', '))})">
+              title="Show or hide the ${hydroLabel} ${hydroWhere} (hydro buses: names ending in ${escapeHtml((networkData.hydro_suffixes || []).join(', '))})">
               ${card.showHydro[componentType] ? 'Shown' : 'Hidden'}: ${hydroCount} ${hydroLabel}</button></div>`
         : '';
     const thresholdInput = `<div class="control-group threshold-group" title="Keep only the series whose largest absolute value (in the shown period and unit) reaches this value; empty = no threshold">
@@ -290,9 +322,17 @@ function displayTimeseriesData(card, componentType, timeseriesName) {
     const filterBar = renderFilterBar(filterKey, filterValues || [], totalSeries, shownSeries,
         { id: `cardFilters${card.id}`, note: FILTER_NOTES[cls], extraHtml: thresholdInput + hydroButton });
 
+    // Legend: with many series it takes much of the plot height, so it can be hidden (more than LEGEND_TOGGLE_MIN)
+    const legendToggle = shownSeries > LEGEND_TOGGLE_MIN;
+    const showLegend = !(legendToggle && card.hideLegend);
     const unitChoices = unit ? UNIT_CHOICES[unit.kind].map(p => [p, unitLabel(unit, p)]) : [['', 'n/a']];
+    // Always shown, also when no series match: the unit can then still be changed back
     const unitBar = `<div class="unit-bar">
-        ${cardCsvButton('the plotted series (current filters, period and unit)')}
+        <div class="button-group">
+            ${cardCsvButton('the plotted series (current filters, period and unit)')}
+            ${legendToggle ? `<button type="button" class="toggle-btn" data-card-action="legend"
+                title="Show or hide the legend under the plot (${shownSeries} entries)">${showLegend ? 'Hide legend' : 'Show legend'} (${shownSeries})</button>` : ''}
+        </div>
         <div class="unit-select" title="${unit ? '' : 'Only MW, MWh and price (per MWh) values can be converted'}">
             <label class="control-label">Unit</label>
             <div class="button-group">${optionButtons(`cardUnit${card.id}`, unitChoices, prefix || '', !unit)}</div>
@@ -305,8 +345,8 @@ function displayTimeseriesData(card, componentType, timeseriesName) {
             <p><strong>Time Range:</strong> ${data.time_range.start} to ${data.time_range.end} ·
                <strong>Series:</strong> ${shownSeries} of ${totalSeries} with ${timeIndex.length} time steps shown</p>
         </div>`;
-    card.el.controls.innerHTML = filterBar + (shownSeries === 0
-        ? '<div class="error-panel"><strong>No series match the selected filters.</strong></div>' : unitBar);
+    card.el.controls.innerHTML = filterBar + unitBar + (shownSeries === 0
+        ? '<div class="error-panel"><strong>No series match the selected filters.</strong></div>' : '');
 
     bindFilterBar(document.getElementById(`cardFilters${card.id}`), filterKey, rerender, () => { card.threshold = ''; });
     const controls = card.el.controls;
@@ -319,14 +359,24 @@ function displayTimeseriesData(card, componentType, timeseriesName) {
         card.threshold = this.value.trim();
         rerender();
     });
+    // A unit change resets an active Peak value: the number was meant in the previous unit
+    // (500 MW would become 500 GW and hide every series)
+    controls.querySelectorAll(`[data-option=cardUnit${card.id}]`).forEach(btn => btn.addEventListener('click', function() {
+        if (card.units[unit.kind] === this.dataset.value || (!card.units[unit.kind] && unit.prefix === this.dataset.value)) return;
+        card.units[unit.kind] = this.dataset.value;
+        card.threshold = '';
+        rerender();
+    }));
+    const legendButton = controls.querySelector('[data-card-action=legend]');
+    if (legendButton) legendButton.addEventListener('click', () => {
+        card.hideLegend = !card.hideLegend;
+        rerender();
+    });
     if (shownSeries === 0) {
+        controls.querySelector('.card-download').disabled = true;
         clearCardPlot(card);
         return;
     }
-    controls.querySelectorAll(`[data-option=cardUnit${card.id}]`).forEach(btn => btn.addEventListener('click', function() {
-        card.units[unit.kind] = this.dataset.value;
-        rerender();
-    }));
 
     const names = Object.keys(seriesData);
     const scaled = Object.fromEntries(names.map(n => [n, factor === 1 ? seriesData[n]
@@ -359,8 +409,9 @@ function displayTimeseriesData(card, componentType, timeseriesName) {
         yaxis: { title: shownUnit, ...yAxisKeepingZoom(card.el.plot, view, shownUnit, factor) },
         hovermode: 'x unified',
         hoverlabel: { namelength: -1 },  // full series names (Plotly cuts them at 15 characters by default)
+        showlegend: showLegend,
         legend: { orientation: 'h', x: 0.5, xanchor: 'center', y: -0.2 },
-        margin: { l: 80, r: 80, t: 80, b: 120 },
+        margin: { l: 80, r: 80, t: 80, b: showLegend ? 120 : 60 },
         uirevision: view
     }, { responsive: true, displayModeBar: true, displaylogo: false });
     if (!card.el.plot.__timeSync) {
@@ -384,11 +435,12 @@ function syncTimeAxes(source, ev) {
     Promise.all(targets.map(p => Plotly.relayout(p, update))).finally(() => { syncingTimeAxes = false; });
 }
 
-// Test for the hydro series of a Bus (hydro bus) or Link (a port on a hydro bus) timeseries
+// Test for the hydro series of a Bus (hydro bus), Link (a port on a hydro bus) or Generator (on a hydro bus)
 function hydroSeriesTest(componentType, cls) {
     const hydroBuses = new Set(networkData.hydro_buses || []);
     if (cls === 'Bus') return name => hydroBuses.has(name);
     const staticData = networkData.components[componentType].static;
+    if (cls === 'Generator') return name => hydroBuses.has((staticData.bus || {})[name]);
     const busAttrs = Object.keys(staticData).filter(a => /^bus\d+$/.test(a));
     return name => busAttrs.some(a => hydroBuses.has(staticData[a][name]));
 }
