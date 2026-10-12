@@ -45,7 +45,7 @@ def _snapshot_info(network):
     }
 
 
-def extract_network_data(network, currency='$', custom_plots=None):
+def extract_network_data(network, currency='$', custom_plots=None, bus_size=None):
     """
     Collect the data of the viewer page. Components are discovered dynamically from
     ``network.components`` (new components API): no hard-coded component lists.
@@ -63,7 +63,7 @@ def extract_network_data(network, currency='$', custom_plots=None):
         'hydro_suffixes': list(HYDRO_BUS_SUFFIXES),
         'balance': extract_balance(network, snap['time_index']),
         'carrier_colors': extract_carrier_colors(network),
-        'explore': extract_explore(network),
+        'explore': extract_explore(network, bus_size=bus_size),
         'statistics': extract_statistics(network, currency),
         'custom_plots': {},
     }

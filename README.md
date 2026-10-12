@@ -132,6 +132,10 @@ generate_template(
 | `title` | `str` | `'PyPSA Network Analyzer'` | Page title |
 | `currency` | `str` | `'$'` | Currency symbol for cost units |
 | `custom_plots` | `str` or `list` | `None` | Path to a `.py` file with `get_plots(network)`, or a list of Plotly figures |
+| `bus_size` | `float`, `dict` or `Series` | `None` | Bus size on the Network Explore map (circle area in km², passed to `n.explore`); use a small value for a small network. Overrides `n.buses["size"]` |
+
+The Network Explore map also uses these custom columns when the network has them:
+`n.buses["size"]`, `n.buses["colour"]`, `n.links["width"]`, `n.links["colour"]`.
 
 `html_viewer` is the former name of `html_network` and still works.
 

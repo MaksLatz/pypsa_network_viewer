@@ -9,7 +9,6 @@ Package layout:
 - extract/          : reads the network into JSON-serialisable data, one module per part of the page
 - render.py         : inlines templates/ (page.html, viewer.css, js/*.js) and the data into one HTML file
 - templates/        : the page's HTML skeleton, CSS and JavaScript modules
-- viewer_updated.py : former name of this module, kept for existing imports
 - excel_template_generator.py : generate_template(), an Excel workbook to define a new network (separate tool)
 """
 
@@ -32,7 +31,7 @@ __all__ = ['html_network', 'HYDRO_BUS_SUFFIXES']
 
 
 def html_network(network, file_path=None, file_name=None, title="PyPSA Network Analyzer",
-                 currency='$', custom_plots=None):
+                 currency='$', custom_plots=None, bus_size=None):
     """
     Generate interactive HTML interface for exploring PyPSA network components and timeseries data.
 
@@ -52,6 +51,11 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
         Either a path to a Python file containing a ``get_plots(network)`` function that
         returns a list of Plotly figure objects, OR a list of Plotly figure objects directly.
         See ``examples/custom_plots_template.py`` in the repository for the expected file format.
+    bus_size : float, dict or pandas.Series, optional
+        Size of the buses on the Network Explore map, passed to ``n.explore(bus_size=...)``: circle area
+        in km², one number for all buses or one value per bus. Use a small value for a small network.
+        Takes priority over a ``size`` column of ``n.buses`` (default: None, the column if present, else
+        PyPSA's default).
 
     Returns:
     --------
@@ -73,12 +77,15 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
     >>> import plotly.graph_objects as go
     >>> fig = go.Figure()
     >>> html_network(network, custom_plots=[fig])
+
+    With smaller buses on the map:
+    >>> html_network(network, bus_size=2)
     """
     if file_name is None:
         file_name = "network_analyzer.html"
     output_file = file_name if file_path is None else os.path.join(file_path, file_name)
 
-    data = extract_network_data(network, currency=currency, custom_plots=custom_plots)
+    data = extract_network_data(network, currency=currency, custom_plots=custom_plots, bus_size=bus_size)
     html_content = render_html(data, title)
 
     if file_path is not None:
