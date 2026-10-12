@@ -7,15 +7,16 @@ from the internet) that can be opened in any browser and shared as is.
 
 ## Features
 
-The viewer page has five tabs:
+The viewer page has six tabs:
 
 | Tab | What it shows |
 |---|---|
 | **Network Summary** | Component counts, network name, PyPSA version, objective, metadata |
 | **Power Balance** | Load, generation (by carrier and hydro type), imports / exports (by node), storage and a mismatch check, for any selection of nodes, with time range, unit and CSV download |
-| **Network Components** | Static tables and timeseries plots of every component (discovered dynamically), global constraints; filters (carrier, type, node, hydro buses), unit conversion, CSV download |
+| **Network Components** | Graph cards (add, remove, reorder; time axes zoomed together) with static tables and timeseries plots of every component, global constraints; filters (carrier, type, node, name, peak value, hydro), hydro generation links in Generators – p, unit conversion, CSV download |
 | **Custom Plots** | Your own Plotly figures, with automatic filters and unit conversion when they show network components |
 | **Network Explore** | The interactive map of `n.explore()` (needs bus coordinates) |
+| **Statistics** | The `n.statistics` methods (choose which to show), as bar charts and tables per carrier or per component & carrier, with CSV download |
 
 **💾 Save this view** (top right) downloads a copy of the page that opens on the current tab, filters
 and settings — handy to share a specific view. The address bar also remembers the view, as a bookmark

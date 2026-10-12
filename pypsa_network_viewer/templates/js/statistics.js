@@ -1,12 +1,11 @@
-// Statistics tab: five n.statistics results (computed in Python, see extract/statistics.py), one card each
-// with a bar chart, a table and a CSV download. "Group by" switches every card between per carrier and
-// per component & carrier (prices are always per bus).
+// Statistics tab: the n.statistics methods (computed in Python, see extract/statistics.py), one card each
+// with a bar chart, a table and a CSV download. "Statistics shown" chooses the cards (default: the market
+// set); "Group by" switches every card between per carrier and per component & carrier.
 
 const STATISTICS_GROUPINGS = ['carrier', 'component'];
 const statisticsState = { groupBy: 'carrier' };
-// Statistics whose total is meaningful (a total row is shown). Not averages such as prices, nor revenue:
-// producers' revenue and consumers' payments cancel out, so its total is ~0.
-const ADDITIVE_STATISTICS = ['supply', 'system_cost'];
+// The cards shown are a filter (attr 'method') of this key, so they are saved with the other filters
+const STATISTICS_FILTER = '__statistics';
 
 function formatNumber(v) {
     const abs = Math.abs(v);
@@ -14,28 +13,60 @@ function formatNumber(v) {
     return v.toLocaleString(undefined, { maximumFractionDigits: abs >= 1000 ? 0 : abs >= 1 ? 2 : 4 });
 }
 
+function statisticsItems() {
+    const stats = networkData.statistics || {};
+    return Array.isArray(stats) ? stats : (stats.items || []);  // (list: files exported before the selector)
+}
+
 function renderStatistics() {
     const view = document.getElementById('statisticsView');
-    const stats = networkData.statistics || [];
+    const items = statisticsItems();
     const groupBy = statisticsState.groupBy;
+    const titleOf = Object.fromEntries(items.map(s => [s.key, s.title]));
+    const keyOf = Object.fromEntries(items.map(s => [s.title, s.key]));
+
+    // Selection, as card titles (what the dropdown lists); never set yet = the default cards
+    const defaults = ((networkData.statistics || {}).default || items.map(s => s.key)).map(k => titleOf[k]).filter(Boolean);
+    if (!activeFilters[STATISTICS_FILTER]) activeFilters[STATISTICS_FILTER] = { method: defaults };
+    const picked = (activeFilters[STATISTICS_FILTER].method || []).filter(t => keyOf[t]);
+    const shown = picked.length ? items.filter(s => picked.includes(s.title)) : items;  // empty = all
+
+    const selector = renderFilterBar(STATISTICS_FILTER,
+        [{ attr: 'method', label: 'Statistics shown', values: items.map(s => s.title) }],
+        items.length, shown.length,
+        { id: 'statisticsSelector', noun: 'statistics',
+          extraHtml: `<div class="control-group">
+              <label class="control-label">Group by</label>
+              <div class="button-group">${optionButtons('statsGroupBy', [['carrier', 'Carrier'], ['component', 'Component & carrier']], groupBy, false)}</div>
+          </div>` });
+
     view.innerHTML = `
-        <div class="info-panel statistics-header">
-            <div>
-                <h3>Statistics</h3>
-                <p>Key results of the optimisation from PyPSA's <code>n.statistics</code>, over all snapshots.
-                   Hover over a bar for its exact value; download any table as CSV.</p>
-            </div>
-            <div class="control-group">
-                <label class="control-label">Group by</label>
-                <div class="button-group">${optionButtons('statsGroupBy', [['carrier', 'Carrier'], ['component', 'Component & carrier']], groupBy, false)}</div>
-            </div>
+        <div class="info-panel">
+            <h3>Statistics</h3>
+            <p>Key results of the optimisation from PyPSA's <code>n.statistics</code>, over all snapshots.
+               Pick the statistics to show below (Reset Filters returns to the default selection); hover over a bar
+               for its exact value; download any table as CSV.</p>
         </div>
-        <div class="statistics-grid">${stats.map(s => `<div class="stat-card" id="statCard-${s.key}"></div>`).join('')}</div>`;
+        ${selector}
+        <div class="statistics-grid">${shown.map(s => `<div class="stat-card" id="statCard-${s.key}"></div>`).join('')}</div>`;
+
+    // The dropdown lists titles in method order (not alphabetically), defaults first
+    bindFilterBar(document.getElementById('statisticsSelector'), STATISTICS_FILTER, renderStatistics, () => {
+        activeFilters[STATISTICS_FILTER] = { method: defaults };
+    });
     view.querySelectorAll('[data-option=statsGroupBy]').forEach(btn => btn.addEventListener('click', function() {
         statisticsState.groupBy = this.dataset.value;
         renderStatistics();
     }));
-    stats.forEach(stat => renderStatisticCard(stat, groupBy));
+    shown.forEach(stat => renderStatisticCard(stat, groupBy));
+}
+
+// Rows of a statistic for the chosen grouping, as { levels, rows } (files exported before: plain lists)
+function statisticRows(stat, groupBy) {
+    const norm = g => Array.isArray(g)
+        ? { levels: g.length ? Object.keys(g[0]).filter(k => k !== 'value') : [], rows: g } : (g || { levels: [], rows: [] });
+    const byComponent = norm(stat.by_component), byCarrier = norm(stat.by_carrier);
+    return groupBy === 'component' && byComponent.rows.length ? byComponent : (byCarrier.rows.length ? byCarrier : byComponent);
 }
 
 function renderStatisticCard(stat, groupBy) {
@@ -47,40 +78,42 @@ function renderStatisticCard(stat, groupBy) {
         return;
     }
 
-    // Rows to show: per bus (prices), per carrier, or per component & carrier; largest first
-    const perBus = stat.key === 'prices';
-    const byComponent = !perBus && groupBy === 'component' && stat.by_component.length;
-    const rows = (byComponent ? stat.by_component : stat.by_carrier)
-        .map(r => ({ ...r, label: perBus ? r.bus : byComponent ? `${r.carrier} (${r.component})` : r.carrier }))
-        .sort((a, b) => b.value - a.value);
-    const colorOf = r => perBus ? '#2980b9' : carrierColor(r.carrier);
-    const additive = ADDITIVE_STATISTICS.includes(stat.key);
+    // Columns: the statistic's own index levels (e.g. component, carrier, bus_carrier; or bus for prices)
+    const { levels, rows: raw } = statisticRows(stat, groupBy);
+    const labelOf = r => {
+        const main = r.carrier !== undefined ? r.carrier : r[levels[levels.length - 1]];
+        const extra = levels.filter(l => l !== 'carrier' && r[l] !== main).map(l => r[l]);
+        return extra.length ? `${main} (${extra.join(', ')})` : String(main);
+    };
+    const rows = raw.map(r => ({ ...r, label: labelOf(r) })).sort((a, b) => b.value - a.value);
+    const colorOf = r => r.carrier !== undefined ? carrierColor(r.carrier) : '#2980b9';
+    const additive = stat.additive !== undefined ? stat.additive : ['supply', 'system_cost'].includes(stat.key);
     const total = rows.reduce((a, r) => a + r.value, 0);
-    const keyCols = perBus ? ['bus'] : byComponent ? ['component', 'carrier'] : ['carrier'];
+    const grouping = levels.includes('component') ? 'Per component & carrier'
+        : levels.includes('carrier') ? 'Per carrier' : `Per ${levels.join(' & ') || 'item'}`;
 
     card.innerHTML = head + `
         <div class="stat-chart-wrap"><div class="stat-chart"></div></div>
         <div class="unit-bar">
-            <span class="stat-note">${perBus ? 'Per bus' : byComponent ? 'Per component & carrier' : 'Per carrier'} · ${rows.length} rows${additive ? ` · total ${escapeHtml(formatNumber(total))} ${escapeHtml(stat.unit)}` : ''}</span>
+            <span class="stat-note">${escapeHtml(grouping)} · ${rows.length} rows${additive ? ` · total ${escapeHtml(formatNumber(total))} ${escapeHtml(stat.unit)}` : ''}</span>
             <button type="button" class="toggle-btn stat-download" title="Download this table as CSV">⬇ Download CSV</button>
         </div>
         <div class="data-table stat-table"><table>
-            <thead><tr>${keyCols.map(c => `<th>${titleCase(c)}</th>`).join('')}<th class="num">Value [${escapeHtml(stat.unit)}]</th></tr></thead>
-            <tbody>${rows.map(r => `<tr>${keyCols.map((c, i) => `<td>${i === keyCols.length - 1 && !perBus
+            <thead><tr>${levels.map(c => `<th>${titleCase(c)}</th>`).join('')}<th class="num">Value${stat.unit ? ` [${escapeHtml(stat.unit)}]` : ''}</th></tr></thead>
+            <tbody>${rows.map(r => `<tr>${levels.map(c => `<td>${c === 'carrier'
                 ? `<span class="swatch-inline" style="background:${escapeHtml(colorOf(r))}"></span>` : ''}${escapeHtml(r[c])}</td>`).join('')}
                 <td class="num">${escapeHtml(formatNumber(r.value))}</td></tr>`).join('')}
-            ${additive ? `<tr class="total-row"><td colspan="${keyCols.length}">Total</td><td class="num">${escapeHtml(formatNumber(total))}</td></tr>` : ''}
+            ${additive ? `<tr class="total-row"><td colspan="${levels.length}">Total</td><td class="num">${escapeHtml(formatNumber(total))}</td></tr>` : ''}
             </tbody></table></div>`;
 
     card.querySelector('.stat-download').addEventListener('click', () => saveCsv(
-        `statistics_${stat.key}_${keyCols.join('_')}.csv`,
-        [...keyCols, `${stat.title} [${stat.unit}]`],
-        rows.map(r => [...keyCols.map(c => r[c]), r.value])));
+        `statistics_${stat.key}_${levels.join('_')}.csv`,
+        [...levels, `${stat.title}${stat.unit ? ` [${stat.unit}]` : ''}`],
+        rows.map(r => [...levels.map(c => r[c]), r.value])));
 
     // Horizontal bars, largest on top; tall lists scroll inside the card
     const chart = card.querySelector('.stat-chart');
-    const height = Math.max(240, rows.length * 24 + 90);
-    chart.style.height = height + 'px';
+    chart.style.height = Math.max(240, rows.length * 24 + 90) + 'px';
     Plotly.react(chart, [{
         type: 'bar', orientation: 'h',
         x: rows.map(r => r.value), y: rows.map(r => r.label),

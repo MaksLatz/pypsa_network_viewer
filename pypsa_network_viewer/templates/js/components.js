@@ -265,10 +265,17 @@ function displayTimeseriesData(card, componentType, timeseriesName) {
         return;
     }
 
-    let { timeIndex, timeStrings, seriesData, periodLabel } = applyPeriodFilter(data.time_index, data.data);
     const rerender = () => renderCard(card);
     const cls = getComponentClass(componentType);
     const filterKey = cardFilterKey(card, componentType);
+
+    // Generators: hydro generators join the Hydro Generation carrier (as in Power Balance), and in 'p' the
+    // hydro generation links are added as generators (see hydroGeneration); both carry their own
+    // attributes in the filter table
+    const hydroLinks = cls === 'Generator' ? hydroGeneration(componentType, timeseriesName === 'p') : null;
+    const allSeries = hydroLinks ? { ...data.data, ...hydroLinks.series } : data.data;
+    const filterTable = hydroLinks ? hydroLinks.table : componentType;
+    let { timeIndex, timeStrings, seriesData, periodLabel } = applyPeriodFilter(data.time_index, allSeries);
 
     // Hydro buses (Buses) / links touching a hydro bus (Links): hidden unless the toggle is on.
     // Applied first, so the filters below only offer what can be shown.
@@ -284,11 +291,11 @@ function displayTimeseriesData(card, componentType, timeseriesName) {
     // Attribute filters (carrier / type / bus for generators, bus0 / bus1 for links, node for buses / stores),
     // then name(s): each filter only offers what remains after the ones before it
     const filterCfg = getFilterConfig(componentType);
-    const totalSeries = Object.keys(data.data).length;
+    const totalSeries = Object.keys(allSeries).length;
     let filterValues = null;
     if (filterCfg) {
-        filterValues = cascadeFilterValues(filterKey, componentType, filterCfg, Object.keys(seriesData));
-        seriesData = applyAttributeFilters(filterKey, componentType, filterCfg, seriesData);
+        filterValues = cascadeFilterValues(filterKey, filterTable, filterCfg, Object.keys(seriesData));
+        seriesData = applyAttributeFilters(filterKey, filterTable, filterCfg, seriesData);
     }
 
     // Unit: MW / MWh / <currency>/MWh can be converted; anything else is shown as exported
@@ -388,12 +395,17 @@ function displayTimeseriesData(card, componentType, timeseriesName) {
         rows: timeStrings.map((t, i) => [t, ...names.map(n => scaled[n][i])])
     }));
 
-    // Generators and storage are coloured by their carrier's static colour (when defined)
+    // Generators and storage are coloured by their carrier's static colour (when defined); hydro links by
+    // a shade of the hydro colour per hydro type (as in Power Balance)
     const carrierCol = CARRIER_COLORED_CLASSES.includes(cls)
         ? networkData.components[componentType].static.carrier : null;
     const colors = networkData.carrier_colors || {};
     const traces = names.map(name => {
         const t = { x: timeIndex, y: scaled[name], type: 'scatter', mode: 'lines', name, line: { width: 2 } };
+        if (hydroLinks && hydroLinks.table.carrier[name] === HYDRO_CARRIER) {
+            t.line.color = hydroColor('generation', hydroLinks.table.type[name] || '(no type)', hydroLinks.types);
+            return t;
+        }
         const carrier = carrierCol ? carrierCol[name] : undefined;
         if (carrier && colors[carrier]) t.line.color = colors[carrier];
         return t;
@@ -418,6 +430,54 @@ function displayTimeseriesData(card, componentType, timeseriesName) {
         card.el.plot.__timeSync = true;
         card.el.plot.on('plotly_relayout', ev => syncTimeAxes(card.el.plot, ev));
     }
+}
+
+// Hydro in the Generators graphs, as in Power Balance:
+// - generators whose carrier is a hydro carrier (HYDRO_GENERATOR_CARRIERS, e.g. run of river) get the
+//   carrier Hydro Generation in the filters, keeping their own type;
+// - with includeLinks ('p' only), the hydro generation links (from a hydro bus to an electrical bus) are
+//   extra series, one per link: power delivered at the electrical bus (-p1), carrier Hydro Generation,
+//   type = hydro bus suffix (Reservoir, Pondage, ...), bus = the electrical bus. Pumping links are not included.
+// Returns { series (the links), table (generators' attribute table, adjusted), types } or null if no hydro.
+const hydroGenerationCache = {};
+function hydroGeneration(componentType, includeLinks) {
+    const cacheKey = componentType + '|' + includeLinks;
+    if (cacheKey in hydroGenerationCache) return hydroGenerationCache[cacheKey];
+    const generators = attributeTable(componentType);
+    const extra = { carrier: {}, type: {}, bus: {}, name: {} };
+    const series = {};
+    Object.entries(generators.carrier || {}).forEach(([name, carrier]) => {
+        if (HYDRO_GENERATOR_CARRIERS.includes(String(carrier).toLowerCase())) extra.carrier[name] = HYDRO_CARRIER;
+    });
+
+    const linksKey = (networkData.component_classes || {}).Link;
+    const links = linksKey && networkData.components[linksKey];
+    const p1 = includeLinks && links && links.timeseries.p1;
+    const hydroBuses = new Set(networkData.hydro_buses || []);
+    if (p1 && hydroBuses.size) {
+        const st = links.static;
+        const suffixes = networkData.hydro_suffixes || [];
+        const genNames = new Set(Object.keys(generators.name || {}));
+        Object.keys(p1.data).forEach(link => {
+            const from = st.bus0[link], to = st.bus1[link];
+            if (!hydroBuses.has(from) || hydroBuses.has(to)) return;
+            const key = genNames.has(link) ? `${link} (link)` : link;  // never shadow a generator
+            series[key] = p1.data[link].map(v => typeof v === 'number' ? -v : v);
+            extra.carrier[key] = HYDRO_CARRIER;
+            extra.type[key] = hydroType(from, suffixes);
+            extra.bus[key] = to;
+            extra.name[key] = key;
+        });
+    }
+
+    let result = null;
+    if (Object.keys(extra.carrier).length) {
+        const table = { ...generators };
+        Object.keys(extra).forEach(attr => { table[attr] = { ...(generators[attr] || {}), ...extra[attr] }; });
+        const types = [...new Set(Object.keys(extra.carrier).map(n => table.type ? table.type[n] || '(no type)' : '(no type)'))].sort();
+        result = { series, table, types };
+    }
+    return (hydroGenerationCache[cacheKey] = result);
 }
 
 // Zooming / panning the time axis of one timeseries plot applies the same time range to the others
