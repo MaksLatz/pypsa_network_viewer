@@ -6,7 +6,6 @@ const TAB_STORAGE_KEY = 'pypsa-viewer-tab';
 document.addEventListener('DOMContentLoaded', function() {
     capturePristinePage();  // before anything is drawn, for "Save this view"
     populateNetworkSummary();
-    populateComponentTypes();
     populateCustomPlots();
     setupEventListeners();
     if (networkData.summary.is_multi_index) {
@@ -66,6 +65,7 @@ function renderTab(name) {
         else if (name === 'components') renderComponentsView();
         else if (name === 'custom') displayCustomPlot(document.getElementById('customPlotSelect').value);
         else if (name === 'explore') renderExplore();
+        else if (name === 'statistics') renderStatistics();
     } catch (error) {
         console.error(error);
         showError('Error loading data: ' + error.message, name);
@@ -73,9 +73,7 @@ function renderTab(name) {
 }
 
 function setupEventListeners() {
-    document.getElementById('componentTypeSelect').addEventListener('change', onComponentTypeChange);
-    document.getElementById('dataTypeSelect').addEventListener('change', onDataTypeChange);
-    document.getElementById('timeseriesSelect').addEventListener('change', renderComponentsView);
+    document.getElementById('addGraphButton').addEventListener('click', addGraphButtonClicked);
     document.getElementById('customPlotSelect').addEventListener('change', function() {
         displayCustomPlot(this.value);
     });

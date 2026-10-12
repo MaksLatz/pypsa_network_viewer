@@ -82,6 +82,19 @@ function unitFactor(unit, prefix) {
     return unit.kind === 'price' ? 1 / ratio : ratio;
 }
 
+// y-axis settings that keep the y zoom of a plot across redraws of the same view (`view`, e.g. one
+// component attribute), including unit changes: a zoomed range is carried over explicitly and rescaled
+// by the unit ratio (e.g. 0-2000 MW -> 0-2 GW). A new view, or a double-click (autorange), starts unzoomed.
+function yAxisKeepingZoom(plotEl, view, unit, factor) {
+    const previous = plotEl && plotEl.__yZoom;
+    const axis = plotEl && plotEl.layout && plotEl.layout.yaxis;
+    if (plotEl) plotEl.__yZoom = { view, factor };
+    const zoomed = previous && previous.view === view && axis && axis.autorange === false && Array.isArray(axis.range);
+    return zoomed
+        ? { uirevision: `${view}|${unit}`, autorange: false, range: axis.range.map(v => v * factor / previous.factor) }
+        : { uirevision: `${view}|${unit}` };
+}
+
 function escapeHtml(value) {
     return String(value).replace(/[&<>"']/g, c => ({
         '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
@@ -159,9 +172,10 @@ function slug(text) {
 }
 
 // Show an error in the view of the tab it came from
-const TAB_VIEWS = { summary: 'networkDetails', balance: 'balanceView', components: 'contentDisplay',
+// (Network Components: a box above the graph cards, so the cards themselves are kept)
+const TAB_VIEWS = { summary: 'networkDetails', balance: 'balanceView', components: 'componentsError', statistics: 'statisticsView',
                     custom: 'customPlotView', explore: 'exploreView' };
 function showError(message, tab) {
-    const view = document.getElementById(TAB_VIEWS[tab || activeTab] || 'contentDisplay');
+    const view = document.getElementById(TAB_VIEWS[tab || activeTab] || 'networkDetails');
     if (view) view.innerHTML = `<div class="error-panel"><strong>Error:</strong> ${escapeHtml(message)}</div>`;
 }

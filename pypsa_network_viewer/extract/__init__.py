@@ -6,6 +6,7 @@ JSON-serialisable data. One module per part of the page:
 - ``balance``      : per-component series for the Power Balance tab (and hydro bus detection)
 - ``custom_plots`` : user-supplied Plotly figures
 - ``explore``      : the ``n.explore()`` map
+- ``statistics``   : five ``n.statistics`` results for the Statistics tab
 """
 
 import pandas as pd
@@ -15,6 +16,7 @@ from .components import (extract_carrier_colors, extract_components, extract_glo
                          extract_network_info)
 from .custom_plots import extract_custom_plots
 from .explore import extract_explore
+from .statistics import extract_statistics
 
 
 def _snapshot_info(network):
@@ -62,6 +64,7 @@ def extract_network_data(network, currency='$', custom_plots=None):
         'balance': extract_balance(network, snap['time_index']),
         'carrier_colors': extract_carrier_colors(network),
         'explore': extract_explore(network),
+        'statistics': extract_statistics(network, currency),
         'custom_plots': {},
     }
 

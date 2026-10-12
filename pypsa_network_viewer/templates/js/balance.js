@@ -301,7 +301,7 @@ function refreshBalance() {
     const genSeries = resolveBalanceSeries(balance.generators);
     const genNodeNames = balance.generators ? atNodes(balance.generators) : [];
     const genCfg = balance.generators
-        ? (getFilterConfig(balance.generators.component) || []).filter(f => f.attr !== 'bus') : [];
+        ? (getFilterConfig(balance.generators.component) || []).filter(f => f.attr !== 'bus' && f.attr !== 'name') : [];
     let genNames = genNodeNames;
     let hydroSelected = hydroKeys;
     let genFilterValues = [];
@@ -675,8 +675,8 @@ function refreshBalance() {
         bindFilterBar(genBar, BALANCE_GEN_FILTERS, refreshBalance, () => { state.genSplit = false; });
     }
 
-    // --- Plot (react keeps the x-axis zoom between updates; the y-axis resets when the unit changes
-    // and the x-axis when the time range changes)
+    // --- Plot (react keeps the zoom between updates; a unit change rescales the y zoom, a new time range
+    // resets the x-axis)
     const emptyHint = traces.length ? [] : [{
         text: timeIndex.length ? 'Switch on Load, Generation, Imports or Exports above to plot them'
                                 : 'No snapshots in the selected time range',
@@ -685,7 +685,9 @@ function refreshBalance() {
     Plotly.react('balancePlot', traces, {
         title: `Power Balance${periodLabel}`,
         xaxis: { title: 'Time', type: 'date', uirevision: `balance|${state.rangeStart}|${state.rangeEnd}` },
-        yaxis: { title: state.unit, uirevision: state.unit, zeroline: true, zerolinecolor: '#7f8c8d' },
+        // A unit change rescales a zoomed y-range instead of resetting it
+        yaxis: { title: state.unit, zeroline: true, zerolinecolor: '#7f8c8d',
+                 ...yAxisKeepingZoom(document.getElementById('balancePlot'), 'balance', state.unit, scale) },
         annotations: emptyHint,
         hovermode: 'x unified',
         hoverlabel: { namelength: -1 },  // full series names (Plotly cuts them at 15 characters by default)

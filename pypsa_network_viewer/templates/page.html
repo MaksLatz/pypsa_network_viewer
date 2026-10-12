@@ -25,6 +25,7 @@ __PNV_CSS__
                 <button type="button" class="tab-btn" data-tab="components" role="tab">Network Components</button>
                 <button type="button" class="tab-btn" data-tab="custom" role="tab">Custom Plots</button>
                 <button type="button" class="tab-btn" data-tab="explore" role="tab">Network Explore</button>
+                <button type="button" class="tab-btn" data-tab="statistics" role="tab">Statistics</button>
             </div>
             <div class="tab-bar-right">
                 <div class="period-picker" id="yearGroup" style="display:none;">
@@ -48,31 +49,15 @@ __PNV_CSS__
         </section>
 
         <section class="tab-panel" id="tab-components">
-            <div class="controls-section">
-                <div class="control-group">
-                    <label class="control-label" for="componentTypeSelect">Component Type</label>
-                    <select id="componentTypeSelect">
-                        <option value="">Select component type...</option>
-                    </select>
-                </div>
-                <div class="control-group">
-                    <label class="control-label" for="dataTypeSelect">Data Type</label>
-                    <select id="dataTypeSelect" disabled>
-                        <option value="">Select data type...</option>
-                        <option value="static">Static Data</option>
-                        <option value="timeseries">Time Series</option>
-                    </select>
-                </div>
-                <div class="control-group">
-                    <label class="control-label" for="timeseriesSelect">Time Series</label>
-                    <select id="timeseriesSelect" disabled>
-                        <option value="">Select timeseries...</option>
-                    </select>
-                </div>
-            </div>
-            <div class="content-area">
-                <div id="contentDisplay"></div>
-            </div>
+            <!-- Graph cards (see components.js), one after another -->
+            <div id="componentsError"></div>
+            <div id="componentsCards"></div>
+            <button type="button" class="toggle-btn add-graph" id="addGraphButton"
+                    title="Add another graph below, e.g. bus prices under generator output">+ Add graph</button>
+        </section>
+
+        <section class="tab-panel" id="tab-statistics">
+            <div id="statisticsView"></div>
         </section>
 
         <section class="tab-panel" id="tab-custom">

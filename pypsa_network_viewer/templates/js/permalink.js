@@ -13,9 +13,12 @@ function currentViewSettings() {
         period: networkData.summary.is_multi_index ? value('yearSelect') : undefined,
         filters: activeFilters,
         balance: balanceState,
-        components: { type: value('componentTypeSelect'), data: value('dataTypeSelect'), ts: value('timeseriesSelect'),
-                      view: componentsView },
-        custom: { plot: value('customPlotSelect'), state: customState }
+        components: {
+            cards: componentsCards.map(c => ({ id: c.id, type: c.type, data: c.data, ts: c.ts,
+                                               showHydro: c.showHydro, units: c.units, threshold: c.threshold }))
+        },
+        custom: { plot: value('customPlotSelect'), state: customState },
+        statistics: statisticsState
     };
 }
 
@@ -90,27 +93,32 @@ function applyViewLink() {
             if (!(balanceState.unit in BALANCE_UNITS)) balanceState.unit = defaults.unit;
         }
 
-        // Network Components: same steps as choosing in the dropdowns, without drawing (the tab may be hidden)
+        // Network Components: the graph cards, created without drawing (the tab may be hidden). Views saved
+        // before graph cards existed ({ type, data, ts, view }) become one card, with their filters.
         if (isObject(s.components)) {
-            const type = setSelect('componentTypeSelect', s.components.type).value;
-            const dataSel = document.getElementById('dataTypeSelect');
-            const tsSel = document.getElementById('timeseriesSelect');
-            if (type && type !== 'global_constraints') {
-                dataSel.disabled = false;
-                setSelect('dataTypeSelect', s.components.data);
-                populateTimeseriesOptions(type);
-                setSelect('timeseriesSelect', s.components.ts);
-                tsSel.disabled = dataSel.value !== 'timeseries';
+            let cards = Array.isArray(s.components.cards) ? s.components.cards : null;
+            if (!cards && typeof s.components.type === 'string') {
+                const old = s.components;
+                cards = [{ id: 1, type: old.type, data: old.data, ts: old.ts,
+                           showHydro: (old.view || {}).showHydro, units: (old.view || {}).units }];
+                if (isObject(activeFilters[old.type])) activeFilters[`card1|${old.type}`] = activeFilters[old.type];
             }
-            const view = s.components.view;
-            if (isObject(view)) {
-                if (isObject(view.showHydro)) Object.entries(view.showHydro).forEach(([k, v]) => {
-                    if (typeof v === 'boolean') componentsView.showHydro[k] = v;
+            const str = v => (typeof v === 'string' ? v : '');
+            (cards || []).filter(isObject).forEach(c => {
+                const showHydro = {}, units = {};
+                if (isObject(c.showHydro)) Object.entries(c.showHydro).forEach(([k, v]) => { if (typeof v === 'boolean') showHydro[k] = v; });
+                if (isObject(c.units)) Object.entries(c.units).forEach(([kind, prefix]) => {
+                    if (UNIT_CHOICES[kind] && UNIT_CHOICES[kind].includes(prefix)) units[kind] = prefix;
                 });
-                if (isObject(view.units)) Object.entries(view.units).forEach(([kind, prefix]) => {
-                    if (UNIT_CHOICES[kind] && UNIT_CHOICES[kind].includes(prefix)) componentsView.units[kind] = prefix;
-                });
-            }
+                addComponentsCard({ id: Number.isInteger(c.id) && c.id > 0 ? c.id : undefined,
+                                    type: str(c.type), data: str(c.data), ts: str(c.ts),
+                                    showHydro, units, threshold: str(c.threshold) });
+            });
+        }
+
+        // Statistics: grouping
+        if (isObject(s.statistics) && STATISTICS_GROUPINGS.includes(s.statistics.groupBy)) {
+            statisticsState.groupBy = s.statistics.groupBy;
         }
 
         // Custom Plots: selected plot and per-plot settings (unit, hydro)

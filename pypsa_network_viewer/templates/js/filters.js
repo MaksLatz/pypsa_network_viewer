@@ -32,10 +32,14 @@ const multiSelectSearch = {};  // 'stateKey|attr' -> search text
 // dropdown is redrawn open and scrolled back here, so the list does not jump back to the top.
 const multiSelectScroll = {};
 
+// Every component can also be filtered by its own name(s), as the last filter (so it only lists the
+// names left by the filters before it); buses already filter by name through Node(s)
+const NAME_FILTER = { attr: 'name', label: 'Name(s)' };
+
 // Filter definitions for a component, limited to attributes present in its static data
 function getFilterConfig(componentType) {
-    const cfg = FILTER_CONFIG[getComponentClass(componentType)];
-    if (!cfg) return null;
+    let cfg = FILTER_CONFIG[getComponentClass(componentType)] || [];
+    if (!cfg.some(f => f.attr === 'name')) cfg = [...cfg, NAME_FILTER];
     const table = attributeTable(componentType);
     const available = cfg.filter(f => table[f.attr]);
     return available.length > 0 ? available : null;

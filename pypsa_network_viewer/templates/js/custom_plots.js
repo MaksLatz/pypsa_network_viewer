@@ -240,7 +240,9 @@ function renderCustomPlot(plotName) {
     // Full series names in the hover box (Plotly cuts them at 15 characters by default)
     layout.hoverlabel = { namelength: -1, ...(layout.hoverlabel || {}) };
     layout.xaxis = { ...(layout.xaxis || {}), uirevision: plotName };
-    layout.yaxis = { ...(layout.yaxis || {}), uirevision: plotName + '|' + st.unit };
+    // A unit change rescales a zoomed y-range instead of resetting it
+    layout.yaxis = { ...(layout.yaxis || {}),
+                     ...yAxisKeepingZoom(document.getElementById('customPlot'), plotName, st.unit, factor) };
     const yTitle = axisTitleText(plot.layout.yaxis);
     if (unit) {
         const title = yTitle.replace(unit.match, unitLabel(unit, st.unit));

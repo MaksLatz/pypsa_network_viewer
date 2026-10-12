@@ -1,5 +1,117 @@
 /* Styles of the PyPSA Network Viewer page (inlined into the generated HTML). */
 
+/* --- Network Components: graph cards, one after another ---------------------------------------------- */
+.graph-card {
+    background: #f8f9fa;
+    border-radius: 10px;
+    padding: 20px;
+    margin-bottom: 20px;
+    border-left: 4px solid #4a6741;
+}
+.graph-card-bar {
+    display: flex;
+    align-items: flex-start;
+    gap: 15px;
+}
+.graph-card-bar .graph-card-selects {
+    flex: 1;
+    margin-bottom: 15px;
+    padding: 15px;
+    background: white;
+}
+.graph-card-remove {
+    margin-top: 6px;
+    white-space: nowrap;
+}
+.graph-card-plot {
+    width: 100%;
+    height: 600px;
+}
+.add-graph {
+    display: block;
+    width: 100%;
+    padding: 14px;
+    border: 2px dashed #4a6741;
+    margin-bottom: 10px;
+}
+.threshold-input {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.threshold-input input {
+    width: 130px;
+    padding: 10px;
+    border: 2px solid #e0e0e0;
+    border-radius: 8px;
+    font-size: 1em;
+}
+
+/* --- Statistics: one card per statistic ------------------------------------------------------------ */
+.statistics-header {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: center;
+    gap: 15px;
+}
+.statistics-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(560px, 1fr));
+    gap: 20px;
+}
+.stat-card {
+    background: white;
+    border-radius: 10px;
+    padding: 18px 20px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.06);
+    border-top: 4px solid #2c3e50;
+    min-width: 0;
+}
+.stat-card-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 10px;
+}
+.stat-card-head h3 {
+    margin: 0;
+    color: #2c3e50;
+}
+.stat-unit {
+    color: #7f8c8d;
+    font-weight: 600;
+}
+.stat-description {
+    color: #555;
+    font-size: 0.9em;
+    margin: 6px 0 10px 0;
+}
+.stat-chart-wrap {
+    max-height: 520px;
+    overflow-y: auto;
+}
+.stat-note {
+    color: #7f8c8d;
+    font-size: 0.9em;
+}
+.stat-table {
+    max-height: 320px;
+    overflow-y: auto;
+    margin-top: 8px;
+}
+.stat-table th, .stat-table td {
+    padding: 6px 10px;
+}
+.stat-table .num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+.stat-table .total-row td {
+    font-weight: 700;
+    border-top: 2px solid #2c3e50;
+}
+
 .tab-bar-right {
     display: flex;
     align-items: center;
