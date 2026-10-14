@@ -29,6 +29,11 @@ const balanceDefaults = () => ({
     genSplit: false,         // one generation line per bus
     importSplit: false,      // one import line per bus
     exportSplit: false,      // one export line per bus
+    // Value filters: hide the breakdown series and Split by Bus lines of a category whose peak |value|
+    // (shown time range and unit) is below this ('' = off); the total lines are never hidden
+    genMinPeak: '',
+    importMinPeak: '',
+    exportMinPeak: '',
     showCarriers: false,     // Chart Style: generation broken down by carrier (and hydro type)
     showSources: false,      // Chart Style: imports broken down by source node
     showDestinations: false, // Chart Style: exports broken down by destination node
@@ -48,8 +53,8 @@ let balanceExport = null;  // what the Power Balance plot currently shows, for C
 // HYDRO_KEY_PREFIX + 'generation|Reservoir', with carrier Hydro Generation / Hydro Pumping and type Reservoir
 const HYDRO_KEY_PREFIX = '__hydro__|';
 // Generators with one of these carriers (lower case) are counted as Hydro Generation, by their 'type'
-// (e.g. run of river), together with the hydro links
-const HYDRO_GENERATOR_CARRIERS = ['hydro'];
+// (e.g. run of river), together with the hydro links; set by html_network(hydro_generator_carriers=...)
+const HYDRO_GENERATOR_CARRIERS = networkData.hydro_generator_carriers || ['hydro'];
 const isHydroKey = name => name.startsWith(HYDRO_KEY_PREFIX);
 const hydroKeyParts = key => {
     const [direction, ...type] = key.slice(HYDRO_KEY_PREFIX.length).split('|');
@@ -391,18 +396,18 @@ function refreshBalance() {
                 color = carrierKeys.size === 1 ? BUS_COLORS[i % BUS_COLORS.length] : shadeColor(color, NODE_SHADES[i % NODE_SHADES.length]);
             }
             add('carrier|' + key, series[key], {
-                group: 'breakdown', hatched: pumping, color,
+                group: 'breakdown', family: 'generation', hatched: pumping, color,
                 label: bus !== undefined ? `${base} – ${bus}` : base
             });
         });
     }
     if (importBreakdown) {
         Object.keys(links.imports.byNode).sort().forEach(src => add('source|' + src, links.imports.byNode[src],
-            { group: 'breakdown', source: true, label: `Imports from ${src}`, color: hashColor(src) }));
+            { group: 'breakdown', family: 'imports', source: true, label: `Imports from ${src}`, color: hashColor(src) }));
     }
     if (exportBreakdown) {
         Object.keys(exportFlows.byNode).sort().forEach(dest => add('dest|' + dest, exportFlows.byNode[dest],
-            { group: 'breakdown', source: true, label: `Exports to ${dest}`, color: hashColor(dest) }));
+            { group: 'breakdown', family: 'exports', source: true, label: `Exports to ${dest}`, color: hashColor(dest) }));
     }
     if (isOn('load')) {
         if (loadSplit) {
@@ -459,11 +464,22 @@ function refreshBalance() {
     const stacked = state.carrierMode === 'stacked';
     const filled = state.stackStyle === 'filled';
     const exportColumns = [];
+    // Value filters: per category, small breakdown series / Split by Bus lines are not drawn (nor exported)
+    const minPeak = { generation: state.genMinPeak, imports: state.importMinPeak, exports: state.exportMinPeak };
+    const hiddenSmall = { generation: 0, imports: 0, exports: 0 };
+    const isSmall = (m, y) => {
+        const family = m.group === 'breakdown' ? m.family : m.bus !== undefined ? m.group : null;
+        const limit = family && minPeak[family] !== '' && minPeak[family] !== undefined ? Number(minPeak[family]) : NaN;
+        if (!Number.isFinite(limit) || y.some(v => Math.abs(v) >= limit)) return false;
+        hiddenSmall[family]++;
+        return true;
+    };
     // Object key order follows insertion, so breakdown areas are drawn first and lines stay on top
     const groupRank = Object.fromEntries(BALANCE_GROUPS.map((g, i) => [g.key, i + 1]));
     const drawn = Object.entries(seriesData).flatMap(([key, values]) => {
         const m = meta[key];
         const y = values.map(v => v * scale);
+        if (isSmall(m, y)) return [];
         if (m.group === 'breakdown') {
             exportColumns.push({ name: m.label, values: y });
             return breakdownTraces(m, timeIndex, y, stacked, filled);
@@ -507,6 +523,17 @@ function refreshBalance() {
            note: 'Applies to every plot below. Hydro buses (' + balance.hydro_suffixes.join(', ') + ') are not listed: ' +
                  'their links appear under Generation as <em>Hydro Generation</em> / <em>Hydro Pumping</em>, by hydro type.' });
 
+    // Value filter box of a category ('generation' / 'imports' / 'exports'), in the shown unit
+    const peakFilter = (stateKey, family, what) => `<div class="control-group threshold-group"
+            title="Hide the ${what} whose largest absolute value (shown time range and unit) is below this value; the total line is always shown. Empty = show all.">
+        <label class="control-label">Hide ${what} with peak |value| &lt;</label>
+        <div class="threshold-input">
+            <input type="number" step="any" min="0" data-peak="${stateKey}" value="${escapeHtml(state[stateKey])}" placeholder="show all">
+            <span>${escapeHtml(state.unit)}</span>
+            ${hiddenSmall[family] ? `<span class="filter-count">${hiddenSmall[family]} hidden</span>` : ''}
+        </div>
+    </div>`;
+
     // Each plot button opens its own options panel while it is switched on
     const panels = {};
     if (balance.loads) {
@@ -518,7 +545,8 @@ function refreshBalance() {
     }
     if (balance.generators) {
         const genOptions = { id: 'balanceGenFilters', title: 'Generation filters', noun: 'generators and hydro types',
-            extraHtml: multiNode ? flagButton('genSplit', 'Split by Bus') : '',
+            extraHtml: (multiNode ? flagButton('genSplit', 'Split by Bus') : '') +
+                peakFilter('genMinPeak', 'generation', 'carrier / node series'),
             note: (multiNode ? '<strong>Split by Bus</strong> also splits the Generation by Carrier breakdown per node ' +
                     '(e.g. pick one carrier to see which node it comes from); with a carrier picked, Generation is then one total line. ' : '') +
                 (hydroKeys.length ? '<em>Hydro Generation</em> = links from hydro buses and hydro generators, <em>Hydro Pumping</em> = links to hydro buses (negative); ' +
@@ -533,12 +561,14 @@ function refreshBalance() {
         panels.imports = `<div class="filter-bar" id="balanceImportOptions">
             <div class="filter-title">Import options</div>
             ${multiNode ? flagButton('importSplit', 'Split by Bus') : ''}
+            ${peakFilter('importMinPeak', 'imports', 'source node / node series')}
             <div class="filter-count">${links.connected} of ${links.totalLinks} links lead to other nodes</div>
             <div class="filter-note">Power flowing <strong>into</strong> the selected node(s) from other nodes, per link and time step (≥ 0). ${linkNote}</div>
         </div>`;
         panels.exports = `<div class="filter-bar" id="balanceExportOptions">
             <div class="filter-title">Export options</div>
             ${multiNode ? flagButton('exportSplit', 'Split by Bus') : ''}
+            ${peakFilter('exportMinPeak', 'exports', 'destination node / node series')}
             <div class="filter-count">${links.connected} of ${links.totalLinks} links lead to other nodes</div>
             <div class="filter-note">Power flowing <strong>out of</strong> the selected node(s) to other nodes, per link and time step, drawn below zero (≤ 0).
                 Imports + Exports = net link flow. ${linkNote}</div>
@@ -638,7 +668,15 @@ function refreshBalance() {
         refreshBalance();
     }));
     controlsDiv.querySelectorAll('[data-option]').forEach(btn => btn.addEventListener('click', function() {
+        // A unit change resets the value filters: their numbers were meant in the previous unit
+        if (this.dataset.option === 'unit' && this.dataset.value !== state.unit) {
+            state.genMinPeak = state.importMinPeak = state.exportMinPeak = '';
+        }
         state[this.dataset.option] = this.dataset.value;
+        refreshBalance();
+    }));
+    controlsDiv.querySelectorAll('[data-peak]').forEach(input => input.addEventListener('change', function() {
+        state[this.dataset.peak] = this.value.trim();
         refreshBalance();
     }));
     document.getElementById('balanceDownload').addEventListener('click', downloadBalanceCsv);

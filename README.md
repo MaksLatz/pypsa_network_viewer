@@ -134,6 +134,8 @@ generate_template(
 | `currency` | `str` | `'$'` | Currency symbol for cost units |
 | `custom_plots` | `str` or `list` | `None` | Path to a `.py` file with `get_plots(network)`, or a list of Plotly figures |
 | `bus_size` | `float`, `dict` or `Series` | `None` | Bus size on the Network Explore map (circle area in km², passed to `n.explore`); use a small value for a small network. Overrides `n.buses["size"]` |
+| `hydro_bus_suffixes` | sequence of `str` | `('Open loop pumping', 'Pondage', 'Reservoir', 'Closed loop pumping')` | A bus whose name ends with one of these is a hydro storage bus; the suffix is its hydro type. Use `()` if the network has none |
+| `hydro_generator_carriers` | sequence of `str` | `('hydro',)` | Generators with these carriers (e.g. run of river) count as *Hydro Generation* in the Power Balance |
 
 The Network Explore map also uses these custom columns when the network has them:
 `n.buses["size"]`, `n.buses["colour"]`, `n.links["width"]`, `n.links["colour"]`.
@@ -159,9 +161,12 @@ Exactly one of `years_duration`, `months_duration`, or `days_duration` must be s
 
 ## Tips
 
-- **Hydro**: buses whose name ends with *Open loop pumping*, *Pondage*, *Reservoir* or *Closed loop
-  pumping* are hydro storage buses (`HYDRO_BUS_SUFFIXES` in `extract/balance.py`). In Power Balance their
-  links count as *Hydro Generation* / *Hydro Pumping*; in Network Components they can be shown or hidden.
+- **Hydro**: buses whose name ends with one of `hydro_bus_suffixes` (default *Open loop pumping*, *Pondage*,
+  *Reservoir*, *Closed loop pumping*) are hydro storage buses. In Power Balance their links count as
+  *Hydro Generation* / *Hydro Pumping* by hydro type (with the `hydro_generator_carriers` generators). In
+  Network Components components are shown as they are: hydro buses, links and generators on hydro buses can
+  be shown or hidden, and Links get *Hydro role* (turbine / pump) and *Hydro type* filters. Networks without
+  hydro buses simply show no hydro options.
 - **Network Explore** needs bus coordinates (`x` = longitude, `y` = latitude).
 - **Custom Plots**: the plot title is its name in the selector — give each figure a meaningful title.
   Units are read from the y-axis title (MW, MWh or currency/MWh).

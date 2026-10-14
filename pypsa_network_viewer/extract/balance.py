@@ -8,16 +8,20 @@ the per-component series, referencing already-exported timeseries instead of cop
 
 import pandas as pd
 
-# Buses whose name ends with one of these suffixes are hydro storage buses
+# Defaults of html_network's hydro_bus_suffixes / hydro_generator_carriers:
+# buses whose name ends with one of these suffixes are hydro storage buses (the suffix is the hydro type) ...
 HYDRO_BUS_SUFFIXES = ('Open loop pumping', 'Pondage', 'Reservoir', 'Closed loop pumping')
+# ... and generators with one of these carriers (any case) on an electrical bus are hydro generators,
+# e.g. run of river (counted as Hydro Generation in the Power Balance)
+HYDRO_GENERATOR_CARRIERS = ('hydro',)
 
 
-def hydro_buses(network):
-    """Names of the hydro storage buses (name ends with one of HYDRO_BUS_SUFFIXES, case-insensitive)."""
+def hydro_buses(network, suffixes=HYDRO_BUS_SUFFIXES):
+    """Names of the hydro storage buses (name ends with one of `suffixes`, case-insensitive)."""
     buses = next((c for c in network.components.values() if getattr(c, 'name', '') == 'Bus'), None)
-    if buses is None or buses.static.empty:
+    if buses is None or buses.static.empty or not suffixes:
         return []
-    suffixes = tuple(s.lower() for s in HYDRO_BUS_SUFFIXES)
+    suffixes = tuple(s.lower() for s in suffixes)
     return [str(b) for b in buses.static.index if str(b).strip().lower().endswith(suffixes)]
 
 
@@ -78,7 +82,7 @@ def _component_series(comp_key, comp, attr, snapshots):
     }
 
 
-def extract_balance(network, time_index):
+def extract_balance(network, time_index, hydro_suffixes=HYDRO_BUS_SUFFIXES):
     """
     Build the per-component series used by the Power Balance tab.
     Returns None if the network has no loads and no generators.
@@ -107,12 +111,12 @@ def extract_balance(network, time_index):
         'links': None,
         'buses': [],
         'hydro_buses': [],
-        'hydro_suffixes': list(HYDRO_BUS_SUFFIXES),
+        'hydro_suffixes': list(hydro_suffixes),
     }
 
     if buses is not None and not buses.static.empty:
         balance['buses'] = [str(b) for b in buses.static.index]
-        balance['hydro_buses'] = hydro_buses(network)
+        balance['hydro_buses'] = hydro_buses(network, hydro_suffixes)
 
     # Link flows at every port (bus0, bus1, bus2, ...) for the Imports / Exports views
     if links is not None and not links.static.empty and _has_results(links, 'p0'):

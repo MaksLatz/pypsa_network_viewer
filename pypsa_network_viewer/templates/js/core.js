@@ -20,6 +20,9 @@ function carrierColor(carrier) {
     // Pumping: a much darker shade of the hydro colour (same family, clearly distinct), drawn hatched
     if (carrier === HYDRO_PUMPING) return shadeColor(colors.hydro || HYDRO_COLOR, -0.55);
     if (colors[carrier]) return colors[carrier];
+    // A renamed carrier (e.g. 'Hydro Run of River', see filters.js) keeps the colour of the real one
+    const alias = typeof CARRIER_ALIASES !== 'undefined' && CARRIER_ALIASES[carrier];
+    if (alias && colors[alias]) return colors[alias];
     return hashColor(carrier);
 }
 

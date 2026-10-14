@@ -15,6 +15,8 @@
 ### Code Structure
 - `viewer.py` (html_network) + `extract/` (data) + `render.py` + `templates/` (HTML, CSS, JS modules)
   replace the single `viewer_updated.py`, which was removed (import from `pypsa_network_viewer` instead)
+- `html_network(..., hydro_bus_suffixes=..., hydro_generator_carriers=...)`: how hydro is recognised, so the
+  hydro features adapt to any network (defaults: the four hydro bus suffixes, carrier 'hydro')
 - `html_network(..., bus_size=...)`: optional bus size of the Network Explore map; the map also uses the
   custom columns `n.buses["size"]`, `n.buses["colour"]`, `n.links["width"]`, `n.links["colour"]` when present
 - `html_viewer` is now an alias of `html_network` (the former `html_viewer` implementation was removed)

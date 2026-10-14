@@ -24,14 +24,15 @@ if _PYPSA_MAJOR < 1:
 
 pypsa.options.api.new_components_api = True
 
-from .extract import HYDRO_BUS_SUFFIXES, extract_network_data  # noqa: E402  (needs the option above)
+from .extract import HYDRO_BUS_SUFFIXES, HYDRO_GENERATOR_CARRIERS, extract_network_data  # noqa: E402  (needs the option above)
 from .render import render_html  # noqa: E402
 
-__all__ = ['html_network', 'HYDRO_BUS_SUFFIXES']
+__all__ = ['html_network', 'HYDRO_BUS_SUFFIXES', 'HYDRO_GENERATOR_CARRIERS']
 
 
 def html_network(network, file_path=None, file_name=None, title="PyPSA Network Analyzer",
-                 currency='$', custom_plots=None, bus_size=None):
+                 currency='$', custom_plots=None, bus_size=None,
+                 hydro_bus_suffixes=HYDRO_BUS_SUFFIXES, hydro_generator_carriers=HYDRO_GENERATOR_CARRIERS):
     """
     Generate interactive HTML interface for exploring PyPSA network components and timeseries data.
 
@@ -56,6 +57,15 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
         in km², one number for all buses or one value per bus. Use a small value for a small network.
         Takes priority over a ``size`` column of ``n.buses`` (default: None, the column if present, else
         PyPSA's default).
+    hydro_bus_suffixes : sequence of str, optional
+        A bus whose name ends with one of these (case-insensitive) is a hydro storage bus; the suffix is its
+        hydro type (default: 'Open loop pumping', 'Pondage', 'Reservoir', 'Closed loop pumping'). Links from
+        a hydro bus to an electrical bus are hydro turbines, links to a hydro bus are pumps. Use ``()`` for
+        a network without hydro storage buses.
+    hydro_generator_carriers : sequence of str, optional
+        Generators with one of these carriers (case-insensitive) on an electrical bus are hydro generators,
+        e.g. run of river: the Power Balance counts them as Hydro Generation, by their ``type``
+        (default: ('hydro',)).
 
     Returns:
     --------
@@ -85,7 +95,9 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
         file_name = "network_analyzer.html"
     output_file = file_name if file_path is None else os.path.join(file_path, file_name)
 
-    data = extract_network_data(network, currency=currency, custom_plots=custom_plots, bus_size=bus_size)
+    data = extract_network_data(network, currency=currency, custom_plots=custom_plots, bus_size=bus_size,
+                                hydro_bus_suffixes=hydro_bus_suffixes,
+                                hydro_generator_carriers=hydro_generator_carriers)
     html_content = render_html(data, title)
 
     if file_path is not None:

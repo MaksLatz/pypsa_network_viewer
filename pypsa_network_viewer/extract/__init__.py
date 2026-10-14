@@ -6,12 +6,12 @@ JSON-serialisable data. One module per part of the page:
 - ``balance``      : per-component series for the Power Balance tab (and hydro bus detection)
 - ``custom_plots`` : user-supplied Plotly figures
 - ``explore``      : the ``n.explore()`` map
-- ``statistics``   : five ``n.statistics`` results for the Statistics tab
+- ``statistics``   : the ``n.statistics`` methods for the Statistics tab
 """
 
 import pandas as pd
 
-from .balance import HYDRO_BUS_SUFFIXES, extract_balance, hydro_buses
+from .balance import HYDRO_BUS_SUFFIXES, HYDRO_GENERATOR_CARRIERS, extract_balance, hydro_buses
 from .components import (extract_carrier_colors, extract_components, extract_global_constraints,
                          extract_network_info)
 from .custom_plots import extract_custom_plots
@@ -45,11 +45,14 @@ def _snapshot_info(network):
     }
 
 
-def extract_network_data(network, currency='$', custom_plots=None, bus_size=None):
+def extract_network_data(network, currency='$', custom_plots=None, bus_size=None,
+                         hydro_bus_suffixes=HYDRO_BUS_SUFFIXES, hydro_generator_carriers=HYDRO_GENERATOR_CARRIERS):
     """
     Collect the data of the viewer page. Components are discovered dynamically from
     ``network.components`` (new components API): no hard-coded component lists.
     """
+    hydro_bus_suffixes = tuple(hydro_bus_suffixes or ())
+    hydro_generator_carriers = tuple(str(c).lower() for c in (hydro_generator_carriers or ()))
     snap = _snapshot_info(network)
     summary, components, component_classes = extract_components(
         network, snap['time_index'], snap['time_range'], currency)
@@ -59,9 +62,10 @@ def extract_network_data(network, currency='$', custom_plots=None, bus_size=None
         'components': components,
         'component_classes': component_classes,
         # Hydro buses are also used by the Custom Plots filters, which work without the balance data
-        'hydro_buses': hydro_buses(network),
-        'hydro_suffixes': list(HYDRO_BUS_SUFFIXES),
-        'balance': extract_balance(network, snap['time_index']),
+        'hydro_buses': hydro_buses(network, hydro_bus_suffixes),
+        'hydro_suffixes': list(hydro_bus_suffixes),
+        'hydro_generator_carriers': list(hydro_generator_carriers),
+        'balance': extract_balance(network, snap['time_index'], hydro_bus_suffixes),
         'carrier_colors': extract_carrier_colors(network),
         'explore': extract_explore(network, bus_size=bus_size),
         'statistics': extract_statistics(network, currency),

@@ -21,9 +21,13 @@ const FILTER_CONFIG = {
     ],
     Link: [
         { attr: 'bus0', label: 'From bus (bus0)' },
-        { attr: 'bus1', label: 'To bus (bus1)' }
+        { attr: 'bus1', label: 'To bus (bus1)' },
+        // Only offered when the network has hydro links (see attributeTable)
+        { attr: 'hydro_role', label: 'Hydro role' },
+        { attr: 'hydro_type', label: 'Hydro type' }
     ]
 };
+const HYDRO_ROLES = { turbine: 'Turbine (hydro → grid)', pump: 'Pump (grid → hydro)' };
 const FILTER_NOTES = {
     Link: 'p0 &gt; 0 means power flows from bus0 to bus1; negative values indicate flow in the reverse direction.'
 };
@@ -45,17 +49,54 @@ function getFilterConfig(componentType) {
 
 // Attribute table of a component ({ attr: { name: value } }). `source` is a component key, or already
 // a table, e.g. the Power Balance's mix of generators and hydro links. Component tables also get a
-// 'name' column (each component's own name), so e.g. buses can be filtered by name; the static data
-// itself is left unchanged.
+// 'name' column (each component's own name), so e.g. buses can be filtered by name, and links with a
+// port on a hydro bus get 'hydro_role' (turbine: from the hydro bus, pump: to it) and 'hydro_type' (the
+// hydro bus suffix, e.g. Reservoir). The static data itself is left unchanged.
 const attributeTables = {};
 function attributeTable(source) {
     if (typeof source !== 'string') return source;
     if (!attributeTables[source]) {
         const staticData = networkData.components[source].static;
         const names = Object.keys(Object.values(staticData)[0] || {});
-        attributeTables[source] = { ...staticData, name: Object.fromEntries(names.map(n => [n, n])) };
+        const table = { ...staticData, name: Object.fromEntries(names.map(n => [n, n])) };
+        const hydroBuses = new Set(networkData.hydro_buses || []);
+        if (getComponentClass(source) === 'Generator' && staticData.carrier) {
+            table.carrier = runOfRiverCarriers(staticData, hydroBuses);
+        }
+        if (getComponentClass(source) === 'Link' && hydroBuses.size && staticData.bus0 && staticData.bus1) {
+            const suffixes = networkData.hydro_suffixes || [];
+            const role = {}, type = {};
+            names.forEach(n => {
+                const from = staticData.bus0[n], to = staticData.bus1[n];
+                role[n] = hydroBuses.has(from) ? HYDRO_ROLES.turbine : hydroBuses.has(to) ? HYDRO_ROLES.pump : '';
+                type[n] = role[n] ? hydroType(hydroBuses.has(from) ? from : to, suffixes) : '';
+            });
+            if (Object.values(role).some(Boolean)) Object.assign(table, { hydro_role: role, hydro_type: type });
+        }
+        attributeTables[source] = table;
     }
     return attributeTables[source];
+}
+
+// Generator carriers as shown in the filters: a hydro carrier (html_network's hydro_generator_carriers)
+// whose generators on electrical buses are all of type run of river is shown as 'Hydro Run of River'
+// (inflow generators on hydro buses keep their carrier). Its colour stays the carrier's (CARRIER_ALIASES).
+const RUN_OF_RIVER_LABEL = 'Hydro Run of River';
+const RUN_OF_RIVER_TYPE = /^\s*(run[\s_-]*of[\s_-]*river|ror)\s*$/i;
+const CARRIER_ALIASES = {};
+function runOfRiverCarriers(staticData, hydroBuses) {
+    const hydroCarriers = networkData.hydro_generator_carriers || ['hydro'];
+    const carriers = { ...staticData.carrier };
+    const onGrid = Object.keys(carriers).filter(n => !hydroBuses.has((staticData.bus || {})[n]));
+    [...new Set(onGrid.map(n => carriers[n]))]
+        .filter(c => hydroCarriers.includes(String(c).toLowerCase()))
+        .forEach(carrier => {
+            const gens = onGrid.filter(n => carriers[n] === carrier);
+            if (!gens.every(n => RUN_OF_RIVER_TYPE.test((staticData.type || {})[n] || ''))) return;
+            gens.forEach(n => { carriers[n] = RUN_OF_RIVER_LABEL; });
+            CARRIER_ALIASES[RUN_OF_RIVER_LABEL] = carrier;
+        });
+    return carriers;
 }
 
 // Keep entries of seriesData whose component matches the filters stored under stateKey.
@@ -75,27 +116,42 @@ function applyAttributeFilters(stateKey, componentType, filterCfg, seriesData) {
     return result;
 }
 
-// Attach the selectable values to each filter, cascading in filterCfg order: a filter only offers
-// values found among the components (from names) that match the filters before it, e.g. Type only
-// lists the types of the selected carrier(s). Selections that are no longer offered are dropped.
-// Call before applyAttributeFilters so the dropped selections are not applied.
-// extraValues ({ attr: [values] }) adds options that are not component attributes (e.g. Hydro Generation).
+// Attach the selectable values to each filter. Filters narrow each other in every direction: a filter
+// only offers the values found among the components (from names) that match all the OTHER filters, e.g.
+// picking node FR00 lists only the carriers / types / names at FR00, and picking a carrier lists only the
+// nodes that have it. Selections that no longer match anything are dropped (call this before
+// applyAttributeFilters). extraValues ({ attr: [values] }) adds options that are not component attributes.
 function cascadeFilterValues(stateKey, componentType, filterCfg, names, extraValues = {}) {
-    const staticData = attributeTable(componentType);
+    const table = attributeTable(componentType);
     const selected = activeFilters[stateKey] || {};
-    let pool = names;
+    const matchesOthers = (name, attr) => filterCfg.every(f => {
+        if (f.attr === attr) return true;
+        const wanted = selected[f.attr];
+        return !wanted || !wanted.length || wanted.includes(table[f.attr][name]);
+    });
+    const valuesFor = f => {
+        const values = new Set(names.filter(n => matchesOthers(n, f.attr)).map(n => table[f.attr][n]));
+        values.delete(undefined);
+        (extraValues[f.attr] || []).forEach(v => values.add(v));
+        return values;
+    };
+    // Drop selected values that no component compatible with the other selections has; repeat until
+    // stable, since dropping one selection widens the others
+    for (let pass = 0; pass <= filterCfg.length; pass++) {
+        let changed = false;
+        filterCfg.forEach(f => {
+            const wanted = selected[f.attr];
+            if (!wanted || !wanted.length) return;
+            const possible = valuesFor(f);
+            const kept = wanted.filter(v => possible.has(v));
+            if (kept.length !== wanted.length) { selected[f.attr] = kept; changed = true; }
+        });
+        if (!changed) break;
+    }
     return filterCfg.map(f => {
-        const col = staticData[f.attr];
-        const values = [...new Set([...pool.map(n => col[n]).filter(v => v !== undefined),
-                                    ...(extraValues[f.attr] || [])])].sort();
-        if (selected[f.attr]) {
-            selected[f.attr] = selected[f.attr].filter(v => values.includes(v));
-            if (selected[f.attr].length) {
-                const keep = new Set(selected[f.attr]);
-                pool = pool.filter(n => keep.has(col[n]));
-            }
-        }
-        return { ...f, values };
+        const values = valuesFor(f);
+        (selected[f.attr] || []).forEach(v => values.add(v));  // a selection always stays visible
+        return { ...f, values: [...values].sort() };
     });
 }
 
