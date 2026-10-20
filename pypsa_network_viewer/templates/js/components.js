@@ -396,14 +396,18 @@ function displayTimeseriesData(card, componentType, timeseriesName) {
         rows: timeStrings.map((t, i) => [t, ...names.map(n => scaled[n][i])])
     }));
 
-    // Generators and storage are coloured by their carrier's static colour (when defined)
+    // Generators and storage are coloured by their carrier's static colour (when defined); other series
+    // by their position among ALL the series of the attribute, so a series keeps its colour when filters
+    // add or remove others
     const carrierCol = CARRIER_COLORED_CLASSES.includes(cls)
         ? networkData.components[componentType].static.carrier : null;
     const colors = networkData.carrier_colors || {};
+    const position = new Map(Object.keys(allSeries).map((n, i) => [n, i]));
     const traces = names.map(name => {
         const t = { x: timeIndex, y: scaled[name], type: 'scatter', mode: 'lines', name, line: { width: 2 } };
         const carrier = carrierCol ? carrierCol[name] : undefined;
-        if (carrier && colors[carrier]) t.line.color = colors[carrier];
+        t.line.color = carrier && colors[carrier] ? colors[carrier]
+            : BUS_COLORS[(position.get(name) || 0) % BUS_COLORS.length];
         return t;
     });
 

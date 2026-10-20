@@ -99,19 +99,39 @@ function runOfRiverCarriers(staticData, hydroBuses) {
     return carriers;
 }
 
+// Filters that refine a "parent" filter: { child: parent }. Carrier has priority over Type:
+// - a selected type only narrows the carriers that have it (Wind + Solar with type Offshore = Wind
+//   offshore units + all Solar);
+// - the Type selection never narrows the Carrier list.
+const FILTER_PARENT = { type: 'carrier' };
+
+// match(name, f): does component `name` pass filter f, given the selections and the candidate `names`
+// (needed for the child rule: which parents have at least one selected child value)
+function filterMatcher(table, filterCfg, selected, names) {
+    const parentsWithChild = {};
+    filterCfg.forEach(f => {
+        const parent = FILTER_PARENT[f.attr];
+        const wanted = selected[f.attr];
+        if (parent && table[parent] && wanted && wanted.length) {
+            parentsWithChild[f.attr] = new Set(names.filter(n => wanted.includes(table[f.attr][n])).map(n => table[parent][n]));
+        }
+    });
+    return (name, f) => {
+        const wanted = selected[f.attr];
+        if (!wanted || !wanted.length || wanted.includes(table[f.attr][name])) return true;
+        const parents = parentsWithChild[f.attr];
+        return !!parents && !parents.has(table[FILTER_PARENT[f.attr]][name]);
+    };
+}
+
 // Keep entries of seriesData whose component matches the filters stored under stateKey.
 // Each filter holds a list of accepted values; an empty list means All.
 function applyAttributeFilters(stateKey, componentType, filterCfg, seriesData) {
     const selected = activeFilters[stateKey] || {};
-    const staticData = attributeTable(componentType);
+    const match = filterMatcher(attributeTable(componentType), filterCfg, selected, Object.keys(seriesData));
     const result = {};
     Object.entries(seriesData).forEach(([name, values]) => {
-        const keep = filterCfg.every(f => {
-            const wanted = selected[f.attr];
-            if (!wanted || wanted.length === 0) return true;
-            return wanted.includes(staticData[f.attr][name]);
-        });
-        if (keep) result[name] = values;
+        if (filterCfg.every(f => match(name, f))) result[name] = values;
     });
     return result;
 }
@@ -119,16 +139,15 @@ function applyAttributeFilters(stateKey, componentType, filterCfg, seriesData) {
 // Attach the selectable values to each filter. Filters narrow each other in every direction: a filter
 // only offers the values found among the components (from names) that match all the OTHER filters, e.g.
 // picking node FR00 lists only the carriers / types / names at FR00, and picking a carrier lists only the
-// nodes that have it. Selections that no longer match anything are dropped (call this before
+// nodes that have it - except that a child filter (Type) never narrows its parent (Carrier), see
+// FILTER_PARENT. Selections that no longer match anything are dropped (call this before
 // applyAttributeFilters). extraValues ({ attr: [values] }) adds options that are not component attributes.
 function cascadeFilterValues(stateKey, componentType, filterCfg, names, extraValues = {}) {
     const table = attributeTable(componentType);
     const selected = activeFilters[stateKey] || {};
-    const matchesOthers = (name, attr) => filterCfg.every(f => {
-        if (f.attr === attr) return true;
-        const wanted = selected[f.attr];
-        return !wanted || !wanted.length || wanted.includes(table[f.attr][name]);
-    });
+    let match = filterMatcher(table, filterCfg, selected, names);
+    const matchesOthers = (name, attr) => filterCfg.every(f =>
+        f.attr === attr || FILTER_PARENT[f.attr] === attr || match(name, f));
     const valuesFor = f => {
         const values = new Set(names.filter(n => matchesOthers(n, f.attr)).map(n => table[f.attr][n]));
         values.delete(undefined);
@@ -147,6 +166,7 @@ function cascadeFilterValues(stateKey, componentType, filterCfg, names, extraVal
             if (kept.length !== wanted.length) { selected[f.attr] = kept; changed = true; }
         });
         if (!changed) break;
+        match = filterMatcher(table, filterCfg, selected, names);
     }
     return filterCfg.map(f => {
         const values = valuesFor(f);
@@ -251,6 +271,8 @@ function bindFilterBar(root, stateKey, rerender, onReset) {
         });
         ms.querySelector('[data-action=clear]').addEventListener('click', () => {
             if (activeFilters[stateKey]) delete activeFilters[stateKey][attr];
+            delete multiSelectSearch[id];  // clearing a filter also empties its search box
+            delete multiSelectScroll[id];
             rerender();
         });
         const search = ms.querySelector('.multi-select-search');
@@ -264,6 +286,11 @@ function bindFilterBar(root, stateKey, rerender, onReset) {
     });
     root.querySelector('.reset-filters').addEventListener('click', () => {
         delete activeFilters[stateKey];
+        // ... and the search boxes of all its dropdowns
+        Object.keys(multiSelectSearch).filter(k => k.startsWith(stateKey + '|')).forEach(k => {
+            delete multiSelectSearch[k];
+            delete multiSelectScroll[k];
+        });
         closeMultiSelects();
         if (onReset) onReset();
         rerender();

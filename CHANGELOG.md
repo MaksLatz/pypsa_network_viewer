@@ -11,6 +11,12 @@
 - **Custom Plots**: automatic filters and unit conversion for plots of network components
 - **Network Explore**: the `n.explore()` map, always included (the `explore` parameter is no longer needed)
 - **Save this view**: download a copy of the page that opens on the current view
+- **Stable colours**: a carrier, hydro type, node or component keeps its colour when other series are added
+  or removed (Power Balance and Network Components)
+- **Power Balance – Hydro by Type** (Chart Style): hydro split per type (default) or one Hydro Generation /
+  Hydro Pumping series
+- **Filters**: Carrier has priority over Type (a type only narrows the carriers that have it); Clear and
+  Reset Filters also empty the search boxes
 
 ### Code Structure
 - `viewer.py` (html_network) + `extract/` (data) + `render.py` + `templates/` (HTML, CSS, JS modules)

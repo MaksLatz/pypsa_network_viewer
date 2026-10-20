@@ -37,6 +37,7 @@ const balanceDefaults = () => ({
     showCarriers: false,     // Chart Style: generation broken down by carrier (and hydro type)
     showSources: false,      // Chart Style: imports broken down by source node
     showDestinations: false, // Chart Style: exports broken down by destination node
+    hydroByType: true,       // Chart Style: one hydro series per type (else one Hydro Generation / Pumping)
     carrierMode: 'stacked',  // 'lines' | 'stacked' (applies to every breakdown)
     stackStyle: 'filled',    // 'filled' | 'line'
     rangeStart: '',          // Time Range, 'YYYY-MM-DD' ('' = from the first snapshot)
@@ -89,7 +90,7 @@ function hydroColor(direction, type, types) {
     const colors = networkData.carrier_colors || {};
     const i = Math.max(0, types.indexOf(type));
     const base = colors[type] || colors.hydro || HYDRO_COLOR;
-    const shade = colors[type] ? 0 : [0, 0.35, -0.25, 0.6][i % 4];
+    const shade = colors[type] ? 0 : [0, 0.35, -0.25, 0.6, 0.18, -0.12, 0.48, -0.35][i % 8];
     return direction === 'pumping' ? shadeColor(shadeColor(base, shade), -0.55) : shadeColor(base, shade);
 }
 
@@ -314,6 +315,9 @@ function refreshBalance() {
     // Hydro generators (e.g. run of river) join Hydro Generation, typed by their own 'type' attribute
     const isHydroGen = name => HYDRO_GENERATOR_CARRIERS.includes(String((genStatic.carrier || {})[name]).toLowerCase());
     const hydroGenType = name => (genStatic.type || {})[name] || '';
+    // Every hydro type of the network (not only those shown), so each type keeps its shade
+    const allHydroTypes = () => [...new Set([...balance.hydro_buses.map(b => hydroType(b, balance.hydro_suffixes)),
+        ...Object.keys(genStatic.carrier || {}).filter(isHydroGen).map(n => hydroGenType(n) || '(no type)')])].sort();
     if (genCfg.length) {
         const table = Object.fromEntries(genCfg.map(f => [f.attr, { ...genStatic[f.attr] }]));
         if (table.carrier) genNodeNames.filter(isHydroGen).forEach(n => { table.carrier[n] = HYDRO_CARRIER; });
@@ -360,15 +364,19 @@ function refreshBalance() {
         // One series per carrier; hydro (links and hydro generators) one series per direction and type,
         // generators and links of the same type summed together. With Split by Bus: per carrier and node.
         const SEP = '\u0002';  // separates carrier key and bus in a series key
+        // Hydro by type off: all hydro types of a direction in one series (type '*')
+        const hydroKey = (direction, type) => HYDRO_KEY_PREFIX + direction + '|' + (state.hydroByType ? type : '*');
         const series = {};
         const addSeries = (key, values) => { series[key] = series[key] ? addTo([...series[key]], values) : values; };
         hydroSelected.forEach(key => {
-            if (genSplit) Object.entries(links.hydro.byBus[key]).forEach(([bus, v]) => addSeries(key + SEP + bus, v));
-            else addSeries(key, links.hydro.series[key]);
+            const { direction, type } = hydroKeyParts(key);
+            const k = hydroKey(direction, type);
+            if (genSplit) Object.entries(links.hydro.byBus[key]).forEach(([bus, v]) => addSeries(k + SEP + bus, v));
+            else addSeries(k, links.hydro.series[key]);
         });
         if (genSeries) {
             const groupOf = name => (isHydroGen(name)
-                ? HYDRO_KEY_PREFIX + 'generation|' + (hydroGenType(name) || '(no type)') : genCarrier(name))
+                ? hydroKey('generation', hydroGenType(name) || '(no type)') : genCarrier(name))
                 + (genSplit ? SEP + genBus(name) : '');
             Object.entries(groupSeries(genNames, genSeries, groupOf, length)).forEach(([key, v]) => addSeries(key, v));
         }
@@ -380,20 +388,22 @@ function refreshBalance() {
             return rank(pa.carrierKey) - rank(pb.carrierKey) || pa.carrierKey.localeCompare(pb.carrierKey)
                 || String(pa.bus).localeCompare(String(pb.bus));
         });
-        const hydroTypes = [...new Set(keys.map(k => parts(k).carrierKey).filter(isHydroKey).map(k => hydroKeyParts(k).type))].sort();
-        // Colours: carrier colour; per node, a shade of it - or, for a single carrier, one palette colour per node
-        const carrierKeys = new Set(keys.map(k => parts(k).carrierKey));
-        const splitBuses = [...new Set(keys.map(k => parts(k).bus).filter(b => b !== undefined))].sort();
+        // Colours never depend on what else is shown, so they stay the same when series are added or removed:
+        // a carrier has its colour; a hydro type its shade (position among ALL the network's hydro types);
+        // a node, with Split by Bus, a shade of the carrier colour (position among ALL the nodes)
         const NODE_SHADES = [0, 0.35, -0.3, 0.55, -0.5, 0.2, -0.15, 0.7];
         keys.forEach(key => {
             const { carrierKey, bus } = parts(key);
             const hydro = isHydroKey(carrierKey) ? hydroKeyParts(carrierKey) : null;
             const pumping = !!hydro && hydro.direction === 'pumping';
-            const base = hydro ? `${pumping ? HYDRO_PUMPING : HYDRO_CARRIER} – ${hydro.type}` : carrierKey;
-            let color = hydro ? hydroColor(hydro.direction, hydro.type, hydroTypes) : carrierColor(carrierKey);
+            const allTypes = hydro && hydro.type === '*';
+            const hydroName = pumping ? HYDRO_PUMPING : HYDRO_CARRIER;
+            const base = hydro ? (allTypes ? hydroName : `${hydroName} – ${hydro.type}`) : carrierKey;
+            let color = !hydro ? carrierColor(carrierKey)
+                : allTypes ? carrierColor(hydroName) : hydroColor(hydro.direction, hydro.type, allHydroTypes());
             if (bus !== undefined) {
-                const i = splitBuses.indexOf(bus);
-                color = carrierKeys.size === 1 ? BUS_COLORS[i % BUS_COLORS.length] : shadeColor(color, NODE_SHADES[i % NODE_SHADES.length]);
+                const i = Math.max(0, nodeOptions.indexOf(bus));
+                color = shadeColor(color, NODE_SHADES[i % NODE_SHADES.length]);
             }
             add('carrier|' + key, series[key], {
                 group: 'breakdown', family: 'generation', hatched: pumping, color,
@@ -458,8 +468,8 @@ function refreshBalance() {
     const spanDays = timeIndex.length > 1 ? (timeIndex[timeIndex.length - 1] - timeIndex[0]) / 86400000 : 0;
 
     // Consistent colour per bus across split load / generation / import / export lines
-    const allBuses = [...new Set(Object.values(meta).map(m => m.bus).filter(b => b !== undefined))].sort();
-    const busColor = bus => BUS_COLORS[allBuses.indexOf(bus) % BUS_COLORS.length];
+    // (by the node's position among ALL nodes, so a node keeps its colour when others are added or removed)
+    const busColor = bus => BUS_COLORS[Math.max(0, nodeOptions.indexOf(bus)) % BUS_COLORS.length];
 
     const stacked = state.carrierMode === 'stacked';
     const filled = state.stackStyle === 'filled';
@@ -605,6 +615,9 @@ function refreshBalance() {
                     'Split Imports into one series per node the power comes from (switch Imports on to use).')}
                 ${breakdownButton('showDestinations', 'Exports by Destination Node', isOn('exports'),
                     'Split Exports into one series per node the power goes to (switch Exports on to use).')}
+                ${breakdownButton('hydroByType', 'Hydro by Type', genBreakdown && hydroSelected.length > 0,
+                    'One Hydro Generation / Hydro Pumping series per hydro type (e.g. Reservoir, Pondage); off: one series each ' +
+                    '(the Type filter still selects which hydro types are included). Needs Generation by Carrier.')}
             </div>
         </div>
         <div class="control-group">
