@@ -4,6 +4,48 @@
 
 let currentData = null;
 
+// --- Compact timeseries (see extract/encoding.py) ----------------------------------------------------
+// Each attribute's series are stored as one gzip-compressed block of float32 values, in base64. A block
+// is only decompressed when a graph or tab first reads it ({ name: Float32Array }, kept afterwards), so
+// the page opens fast whatever the size of the network.
+function decodeSeries(encoded) {
+    if (typeof pako === 'undefined') {
+        throw new Error('The data decompressor (pako, loaded from cdnjs.cloudflare.com) is not available: check the internet connection.');
+    }
+    const text = atob(encoded.blob);
+    const bytes = new Uint8Array(text.length);
+    for (let i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i);
+    const raw = pako.ungzip(bytes);
+    const values = new Float32Array(raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength));
+    const out = {};
+    encoded.columns.forEach((name, i) => { out[name] = values.subarray(i * encoded.length, (i + 1) * encoded.length); });
+    return out;
+}
+
+// obj[prop] becomes the decoded series of `encoded`, decompressed on first access
+function lazySeries(obj, prop, encoded) {
+    let decoded = null;
+    Object.defineProperty(obj, prop, {
+        get() { return decoded || (decoded = decodeSeries(encoded)); },
+        enumerable: true, configurable: true
+    });
+}
+
+// Attach the decoders (nothing is decompressed here) and the shared snapshots
+(function installSeriesDecoders() {
+    Object.values(networkData.components || {}).forEach(comp => Object.values(comp.timeseries || {}).forEach(ts => {
+        if (!ts.time_index) ts.time_index = networkData.time_index;
+        if (ts.encoded) lazySeries(ts, 'data', ts.encoded);
+    }));
+    const balance = networkData.balance;
+    if (balance) {
+        if (!balance.time_index) balance.time_index = networkData.time_index;
+        const ports = (balance.links || {}).ports || [];
+        [balance.loads, balance.generators, ...(balance.storage || []), ...ports]
+            .forEach(entry => { if (entry && entry.encoded) lazySeries(entry, 'series', entry.encoded); });
+    }
+})();
+
 const HYDRO_COLOR = '#00acc1';
 // Pseudo-carriers of hydro links in the Power Balance (Carrier filter and breakdown):
 // links leaving a hydro bus generate, links entering a hydro bus pump
@@ -155,6 +197,11 @@ function applyTimeRange(timeIndex, timeStrings, seriesData, start, end) {
 // Save rows (arrays of cells) under a header row as a CSV file
 function saveCsv(fileName, header, rows) {
     const csvCell = v => {
+        // A float32 value from the compact timeseries (exactly representable as float32) is written with
+        // its 7 significant digits, e.g. 130.7 rather than 130.6999969482422
+        if (typeof v === 'number' && Number.isFinite(v) && !Number.isInteger(v) && Math.fround(v) === v) {
+            v = parseFloat(v.toPrecision(7));
+        }
         const s = v === null || v === undefined ? '' : String(v);
         return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
     };

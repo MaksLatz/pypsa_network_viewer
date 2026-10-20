@@ -2,6 +2,8 @@
 
 import re
 
+from .encoding import encode_frame
+
 
 def extract_components(network, time_index, time_range, currency='$'):
     """
@@ -9,7 +11,9 @@ def extract_components(network, time_index, time_range, currency='$'):
 
     Returns (summary, components, component_classes):
     - summary: {component key: number of components}
-    - components: {component key: {'static': {attr: {name: str}}, 'timeseries': {attr: {...}}}}
+    - components: {component key: {'static': {attr: {name: str}}, 'timeseries': {attr: {...}}}}; each
+      timeseries carries its values compactly in 'encoded' (see encoding.py); the page decodes them into
+      'data' ({name: values}) when first used, and takes the snapshots from the page's 'time_index'
     - component_classes: {class name, e.g. 'Generator': component key, e.g. 'generators'}
     """
     summary, components, classes = {}, {}, {}
@@ -28,12 +32,13 @@ def extract_components(network, time_index, time_range, currency='$'):
         for attr_name, ts_df in comp.dynamic.items():
             if ts_df.empty:
                 continue
-            entry['timeseries'][attr_name] = {
-                'data': {str(col): ts_df[col].tolist() for col in ts_df.columns},
-                'time_index': time_index,
-                'time_range': time_range,
-                'unit': unit_for_attribute(attr_name, currency=currency),
-            }
+            ts = {'time_range': time_range, 'unit': unit_for_attribute(attr_name, currency=currency)}
+            encoded = encode_frame(ts_df)
+            if encoded is not None:
+                ts['encoded'] = encoded
+            else:  # values that are not numbers: plain lists
+                ts['data'] = {str(col): ts_df[col].tolist() for col in ts_df.columns}
+            entry['timeseries'][attr_name] = ts
     return summary, components, classes
 
 

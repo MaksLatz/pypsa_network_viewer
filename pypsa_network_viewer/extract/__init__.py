@@ -58,6 +58,8 @@ def extract_network_data(network, currency='$', custom_plots=None, bus_size=None
         network, snap['time_index'], snap['time_range'], currency)
 
     data = {
+        # Snapshots (timestamps), stored once for every timeseries of the page
+        'time_index': snap['time_index'],
         'summary': summary,
         'components': components,
         'component_classes': component_classes,

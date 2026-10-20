@@ -8,6 +8,8 @@ the per-component series, referencing already-exported timeseries instead of cop
 
 import pandas as pd
 
+from .encoding import encode_frame
+
 # Defaults of html_network's hydro_bus_suffixes / hydro_generator_carriers:
 # buses whose name ends with one of these suffixes are hydro storage buses (the suffix is the hydro type) ...
 HYDRO_BUS_SUFFIXES = ('Open loop pumping', 'Pondage', 'Reservoir', 'Closed loop pumping')
@@ -73,12 +75,14 @@ def _component_series(comp_key, comp, attr, snapshots):
     if ts is not None and not ts.empty and set(static.index) <= set(ts.columns):
         return {'component': comp_key, 'names': names, 'ref': [comp_key, attr], 'series': None}
 
+    # Stored compactly like the component timeseries (see encoding.py); the page decodes it into 'series'
     dense = _dense_attribute(comp, attr, snapshots)
     return {
         'component': comp_key,
         'names': names,
         'ref': None,
-        'series': {str(c): dense[c].tolist() for c in dense.columns},
+        'series': None,
+        'encoded': encode_frame(dense),
     }
 
 
@@ -102,7 +106,7 @@ def extract_balance(network, time_index, hydro_suffixes=HYDRO_BUS_SUFFIXES):
         return None
 
     balance = {
-        'time_index': time_index,
+        'time_index': None,  # the page's 'time_index' (stored once for every timeseries)
         'unit': 'MW',
         'loads': None,
         'load_source': None,
