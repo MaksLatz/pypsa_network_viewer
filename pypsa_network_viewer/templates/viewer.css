@@ -560,6 +560,49 @@ input[type=date] {
     align-items: center;
     gap: 10px;
 }
+
+/* --- Comparison tab: copies of graphs, one above the other ------------------------------------------ */
+.comparison-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin: 0 0 12px 0;
+}
+.comparison-head {
+    flex: 1;
+}
+.comparison-head h3 {
+    margin: 0 0 4px 0;
+    color: #2c3e50;
+}
+.comparison-head p {
+    margin: 0 0 10px 0;
+    color: #7f8c8d;
+    font-size: 0.9em;
+}
+.comparison-plot {
+    width: 100%;
+}
+.comparison-units {
+    flex-direction: column;
+    align-items: stretch;
+}
+.comparison-unit-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 4px 0;
+    border-top: 1px solid #eee;
+}
+.comparison-unit-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.stat-card .unit-bar {
+    margin: 8px 0;
+}
 .instructions {
     margin: 0 0 5px 0;
     padding-left: 22px;

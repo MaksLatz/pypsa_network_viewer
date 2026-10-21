@@ -6,9 +6,12 @@
 
 const VIEW_LINK_PREFIX = '#view=';
 
-function currentViewSettings() {
+// forFile: for a saved page, which also keeps the Comparison graphs (too large for the address bar)
+function currentViewSettings(forFile = false) {
     const value = id => document.getElementById(id).value;
     return {
+        comparison: forFile ? comparisonForSave() : undefined,
+        comparisonView: comparisonState,
         tab: activeTab,
         period: networkData.summary.is_multi_index ? value('yearSelect') : undefined,
         filters: activeFilters,
@@ -117,9 +120,21 @@ function applyViewLink() {
             });
         }
 
-        // Statistics: grouping
-        if (isObject(s.statistics) && STATISTICS_GROUPINGS.includes(s.statistics.groupBy)) {
-            statisticsState.groupBy = s.statistics.groupBy;
+        // Statistics: grouping, units per card, hydro buses
+        if (isObject(s.statistics)) {
+            if (STATISTICS_GROUPINGS.includes(s.statistics.groupBy)) statisticsState.groupBy = s.statistics.groupBy;
+            if (typeof s.statistics.hydro === 'boolean') statisticsState.hydro = s.statistics.hydro;
+            if (isObject(s.statistics.units)) Object.entries(s.statistics.units).forEach(([key, id]) => {
+                if (typeof id === 'string') statisticsState.units[key] = id;
+            });
+        }
+
+        // Comparison: the graphs of a saved page (the address bar never holds them: a reloaded saved page
+        // keeps its graphs)
+        restoreComparison(s.comparison || (window.PNV_INITIAL_VIEW || {}).comparison);
+        if (isObject(s.comparisonView)) {
+            if (['stacked', 'overlay'].includes(s.comparisonView.layout)) comparisonState.layout = s.comparisonView.layout;
+            if (COMPARISON_HEIGHTS.some(h => h[0] === s.comparisonView.overlayHeight)) comparisonState.overlayHeight = s.comparisonView.overlayHeight;
         }
 
         // Custom Plots: selected plot and per-plot settings (unit, hydro)
@@ -144,7 +159,7 @@ function applyViewLink() {
 const INITIAL_VIEW_ID = 'pnv-' + 'initial-view';
 const INITIAL_VIEW_LINE = new RegExp('<head>\\n<script id="' + INITIAL_VIEW_ID + '">[^\\n]*\\n');
 function saveViewAsHtml() {
-    const settings = JSON.stringify(currentViewSettings()).replace(/</g, '\\u003c');  // cannot close the script
+    const settings = JSON.stringify(currentViewSettings(true)).replace(/</g, '\\u003c');  // cannot close the script
     // '<\/script>': a plain closing tag here would end this page's own inline <script> block
     const script = `<script id="${INITIAL_VIEW_ID}">window.PNV_INITIAL_VIEW = ${settings};<\/script>\n`;
     // A saved copy saved again: replace its initial view instead of adding a second one

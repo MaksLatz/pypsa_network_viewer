@@ -666,6 +666,7 @@ function refreshBalance() {
         </div>
         <div class="control-group">
             <button type="button" class="toggle-btn" id="balanceDownload" title="Download the plotted series (current nodes, filters, period, time range and unit) as CSV">⬇ Download CSV</button>
+            ${comparisonButton(`id="balanceCompare" ${traces.length ? '' : 'disabled'}`)}
         </div>
     </div>`;
 
@@ -693,6 +694,15 @@ function refreshBalance() {
         refreshBalance();
     }));
     document.getElementById('balanceDownload').addEventListener('click', downloadBalanceCsv);
+    document.getElementById('balanceCompare').addEventListener('click', function() {
+        const groups = Object.keys(state.visible).filter(g => state.visible[g]).map(titleCase).join(', ');
+        const nodesText = pickedNodes.length ? (pickedNodes.length <= 3 ? pickedNodes.join(', ') : `${pickedNodes.length} nodes`) : 'All nodes';
+        const gen = comparisonFilterText(BALANCE_GEN_FILTERS, { carrier: 'Carrier', type: 'Type' });
+        const range = state.rangeStart || state.rangeEnd ? `${state.rangeStart || 'start'} to ${state.rangeEnd || 'end'}` : '';
+        addToComparison(document.getElementById('balancePlot'), `Power Balance – ${nodesText}${periodLabel}`,
+            [groups, gen, state.unit, range].filter(Boolean).join(' · '));
+        confirmComparisonAdd(this);
+    });
     controlsDiv.querySelectorAll('[data-range]').forEach(input => input.addEventListener('change', function() {
         state[this.dataset.range] = this.value;
         // Keep start <= end whichever input was changed

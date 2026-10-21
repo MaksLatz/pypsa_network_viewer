@@ -5,9 +5,15 @@ Each statistic is exported grouped by component and carrier (PyPSA's default ind
 bus_carrier level for energy_balance) and across components (``aggregate_across_components=True``), so
 averages such as the market value are computed by PyPSA rather than summed. Prices are per bus. A
 statistic that cannot be computed carries an error message instead of rows; it never stops the export.
+
+Each statistic is also exported per bus (``by_bus``), for the viewer's Node and hydro bus filters: values for
+additive statistics, numerator and denominator for averages (see AVERAGE_STATISTICS). It is only exported when it
+adds up to PyPSA's own totals; otherwise ``by_bus_note`` says why and the viewer shows the whole network.
 """
 
 import inspect
+
+from .encoding import encode_json
 
 # Shown by default in the Statistics tab (the "market set"); the others can be added with the selector
 DEFAULT_STATISTICS = ('supply', 'revenue', 'market_value', 'prices', 'system_cost')
@@ -41,6 +47,97 @@ STATISTICS_INFO = {
                      'Average price earned per unit of energy (revenue ÷ supply): what one MWh of each carrier is worth on the market.'),
     'prices': ('Prices by Bus', 'price', "Average marginal price at each bus, as computed by PyPSA's n.statistics.prices()."),
 }
+
+
+
+# Averages (not additive): exported per bus as numerator and denominator, so the viewer can recompute them for
+# any selection of nodes / carriers as sum(numerator) / sum(denominator).
+#   market_value = revenue / |dispatch|   -> numerator: revenue; denominator: revenue / market value
+#   capacity_factor = mean output / capacity -> denominator: optimal capacity; numerator: factor x capacity
+AVERAGE_STATISTICS = {
+    'market_value': lambda stats, value, **kw: (_call(stats.revenue, **kw), None),
+    'capacity_factor': lambda stats, value, **kw: (None, _call(stats.optimal_capacity, **kw)),
+}
+
+
+def _call(method, **kwargs):
+    """Call a statistics method unrounded; older PyPSA versions without `round` are called without it."""
+    try:
+        return method(round=None, **kwargs)
+    except TypeError:
+        return method(**kwargs)
+
+
+def _by_bus(stats, key, by_component, by_carrier):
+    """
+    The statistic per component, bus and carrier (plus its other levels, e.g. bus_carrier), as
+    ({'levels', 'encoded': rows [[level values..., value(, numerator, denominator)]], 'average', 'differs'}, None), or
+    (None, reason) when it cannot be split by bus or the split does not add up to PyPSA's own totals.
+    """
+    import numpy as np
+    import pandas as pd
+
+    levels_default = list(by_component.index.names)
+    if 'bus' in levels_default or 'carrier' not in levels_default:
+        return None, None  # already per bus, or not per carrier (e.g. prices: per bus)
+    groupby = ['bus'] + [level for level in levels_default if level != 'component']
+    method = getattr(stats, key)
+    try:
+        value = _call(method, groupby=groupby)
+        if not hasattr(value, 'dropna') or getattr(value, 'ndim', 1) != 1 or 'bus' not in value.index.names:
+            return None, 'PyPSA cannot split this statistic by bus'
+        average = key in AVERAGE_STATISTICS
+        if average:
+            num, den = AVERAGE_STATISTICS[key](stats, value, groupby=groupby)
+            if num is not None:  # numerator given: denominator = numerator / value where defined
+                index = num.index.union(value.index)
+                num = num.reindex(index).fillna(0.0)
+                ratio = value.reindex(index)
+                den = (num / ratio).where(np.isfinite(num / ratio) & (ratio != 0), 0.0)
+            else:                # denominator given: numerator = value x denominator
+                index = value.index.union(den.index)
+                den = den.reindex(index).fillna(0.0)
+                num = (value.reindex(index) * den).fillna(0.0)
+            value = (num / den).where(den != 0)
+            frame = pd.DataFrame({'value': value, 'num': num, 'den': den})
+            frame = frame[(frame['num'] != 0) | (frame['den'] != 0)]
+        else:
+            frame = pd.DataFrame({'value': value.dropna()})
+    except Exception as e:
+        return None, f'could not be split by bus ({type(e).__name__})'
+
+    # The split must reproduce PyPSA's totals per component & carrier and per carrier
+    def mismatches(reference):
+        """Index entries of `reference` that the split does not reproduce (None: levels missing)."""
+        ref_levels = list(reference.index.names)
+        if not set(ref_levels) <= set(frame.index.names):
+            return None
+        grouped = frame.groupby(level=ref_levels).sum()
+        mine = grouped['num'] / grouped['den'] if average else grouped['value']
+        bad = []
+        for idx, ref in reference.dropna().items():
+            got = mine.get(idx, 0.0)
+            if not np.isfinite(got) or abs(got - ref) > 1e-4 * abs(ref) + 0.02:
+                bad.append(idx)
+        return bad
+
+    if mismatches(by_component) != []:
+        return None, 'the values per bus do not add up to the totals of PyPSA'
+    # Across components, an average can differ from PyPSA's when PyPSA divides by quantities without revenue,
+    # e.g. the energy level of Stores in market_value: those carriers are listed, the viewer notes them
+    differs = []
+    if by_carrier is not None:
+        bad = mismatches(by_carrier)
+        if bad is None or (bad and not average):
+            return None, 'the values per bus do not add up to the totals of PyPSA'
+        differs = sorted({str(idx[0] if isinstance(idx, tuple) else idx) for idx in bad})
+    levels = list(frame.index.names)
+    columns = ['value', 'num', 'den'] if average else ['value']
+    number = lambda v: float(v) if np.isfinite(v) else None
+    rows = [[*(str(p) for p in (idx if isinstance(idx, tuple) else (idx,))), *(number(v) for v in vals)]
+            for idx, vals in zip(frame.index, frame[columns].to_numpy())]
+    # Rows compressed (large networks: thousands of rows per statistic); decoded by the page on first use
+    return {'levels': levels, 'encoded': encode_json(rows), 'average': average, 'differs': differs}, None
 
 
 def _rows(series):
@@ -79,11 +176,11 @@ def extract_statistics(network, currency='$'):
         method = getattr(network.statistics, key)
         doc = next((line.strip() for line in (method.__doc__ or '').splitlines() if line.strip()), '')
         title, kind, description = STATISTICS_INFO.get(key, (key.replace('_', ' ').title(), None, doc))
-        entry = {'key': key, 'title': title, 'unit': units[kind], 'description': description,
+        entry = {'key': key, 'title': title, 'unit': units[kind], 'unit_kind': kind, 'description': description,
                  # a total row makes sense for energies and costs; not for averages, ratios, revenue (~0) or balances
                  'additive': kind in ('energy', 'money') and key not in ('revenue', 'energy_balance'),
                  'by_component': {'levels': [], 'rows': []}, 'by_carrier': {'levels': [], 'rows': []},
-                 'error': None}
+                 'by_bus': None, 'by_bus_note': None, 'error': None}
         if not solved:
             entry['error'] = 'No optimisation results: run network.optimize() before exporting.'
             items.append(entry)
@@ -94,13 +191,18 @@ def extract_statistics(network, currency='$'):
                 raise TypeError(f'returned {type(result).__name__}, not a series')
             levels, rows = _rows(result)
             entry['by_component'] = {'levels': levels, 'rows': rows}
+            aggregated = None
             if 'component' in levels:
-                levels, rows = _rows(method(aggregate_across_components=True))
+                aggregated = method(aggregate_across_components=True)
+                levels, rows = _rows(aggregated)
                 entry['by_carrier'] = {'levels': levels, 'rows': rows}
             else:  # e.g. prices: per bus, no component level
                 entry['by_carrier'] = entry['by_component']
             if not entry['by_component']['rows']:
                 entry['error'] = 'PyPSA returned no values for this statistic.'
+            else:
+                # Per bus, for the Node and hydro bus filters of the viewer
+                entry['by_bus'], entry['by_bus_note'] = _by_bus(network.statistics, key, result, aggregated)
         except Exception as e:  # e.g. not available for this kind of network
             entry['error'] = f'Could not be computed: {type(e).__name__}: {e}'
         items.append(entry)

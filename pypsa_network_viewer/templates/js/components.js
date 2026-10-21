@@ -338,6 +338,7 @@ function displayTimeseriesData(card, componentType, timeseriesName) {
     const unitBar = `<div class="unit-bar">
         <div class="button-group">
             ${cardCsvButton('the plotted series (current filters, period and unit)')}
+            ${comparisonButton(`data-card-action="compare" ${shownSeries ? '' : 'disabled'}`)}
             ${legendToggle ? `<button type="button" class="toggle-btn" data-card-action="legend"
                 title="Show or hide the legend under the plot (${shownSeries} entries)">${showLegend ? 'Hide legend' : 'Show legend'} (${shownSeries})</button>` : ''}
         </div>
@@ -375,6 +376,13 @@ function displayTimeseriesData(card, componentType, timeseriesName) {
         card.threshold = '';
         rerender();
     }));
+    controls.querySelector('[data-card-action=compare]').addEventListener('click', function() {
+        const filters = comparisonFilterText(filterKey, Object.fromEntries((filterValues || []).map(f => [f.attr, f.label])));
+        const extra = [filters, card.threshold ? `Peak ≥ ${card.threshold} ${shownUnit}` : '',
+                       `${shownSeries} of ${totalSeries} series`, shownUnit].filter(Boolean);
+        addToComparison(card.el.plot, `${titleCase(componentType)} – ${timeseriesName}${periodLabel}`, extra.join(' · '));
+        confirmComparisonAdd(this);
+    });
     const legendButton = controls.querySelector('[data-card-action=legend]');
     if (legendButton) legendButton.addEventListener('click', () => {
         card.hideLegend = !card.hideLegend;

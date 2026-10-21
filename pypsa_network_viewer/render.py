@@ -20,6 +20,7 @@ JS_MODULES = (
     'explore.js',       # Network Explore tab
     'balance.js',       # Power Balance tab
     'statistics.js',    # Statistics tab
+    'comparison.js',    # Comparison tab (copies of Power Balance / Network Components graphs)
     'permalink.js',     # view settings saved in / restored from the page link
     'app.js',           # start-up, tab navigation, Network Summary tab
 )

@@ -66,6 +66,7 @@ function renderTab(name) {
         else if (name === 'custom') displayCustomPlot(document.getElementById('customPlotSelect').value);
         else if (name === 'explore') renderExplore();
         else if (name === 'statistics') renderStatistics();
+        else if (name === 'comparison') renderComparison();
     } catch (error) {
         console.error(error);
         showError('Error loading data: ' + error.message, name);

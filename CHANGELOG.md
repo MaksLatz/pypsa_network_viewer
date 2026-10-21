@@ -15,6 +15,15 @@
   or removed (Power Balance and Network Components)
 - **Power Balance – Hydro by Type** (Chart Style): hydro split per type (default) or one Hydro Generation /
   Hydro Pumping series
+- **Statistics**: Carrier, Node(s) and Hydro buses filters (one bar for all cards), Group by Node & carrier,
+  a unit per card (kWh–TWh, kW–TW, currency to bn, per kWh / MWh). The statistics are also exported per bus;
+  averages (market value, capacity factor) are recomputed as sum(numerator) / sum(denominator). A statistic
+  whose values per bus do not add up to PyPSA's totals shows the whole network, with a note
+- **Comparison tab**: ＋ Add to Comparison under the Power Balance and Network Components graphs copies the
+  graph as it is; the copies are shown one above the other with linked time axes (Stacked), or the chosen
+  series of all graphs in one plot with one y-axis per unit (Overlay); each graph has its own unit, and graphs
+  in the same unit share an axis. The copies are kept in saved views
+- The statistics per bus are stored compressed (gzip, decoded on first use)
 - **Filters**: Carrier has priority over Type (a type only narrows the carriers that have it); Clear and
   Reset Filters also empty the search boxes
 

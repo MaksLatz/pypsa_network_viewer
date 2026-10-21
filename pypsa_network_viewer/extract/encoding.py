@@ -32,3 +32,14 @@ def encode_frame(df):
         # mtime=0: the same network always gives the same page
         'blob': base64.b64encode(gzip.compress(block, compresslevel=6, mtime=0)).decode('ascii'),
     }
+
+
+JSON_ENCODING = 'json-gzip-base64'
+
+
+def encode_json(obj):
+    """Any JSON value -> {'encoding', 'blob'}: gzip-compressed JSON text in base64 (decodeJson in core.js)."""
+    import json
+    text = json.dumps(obj, separators=(',', ':'), allow_nan=False)
+    return {'encoding': JSON_ENCODING,
+            'blob': base64.b64encode(gzip.compress(text.encode('utf-8'), compresslevel=6, mtime=0)).decode('ascii')}

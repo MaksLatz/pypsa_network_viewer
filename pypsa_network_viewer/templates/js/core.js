@@ -22,11 +22,22 @@ function decodeSeries(encoded) {
     return out;
 }
 
-// obj[prop] becomes the decoded series of `encoded`, decompressed on first access
-function lazySeries(obj, prop, encoded) {
+// Any JSON value stored gzip-compressed in base64 (encode_json in extract/encoding.py)
+function decodeJson(encoded) {
+    if (typeof pako === 'undefined') {
+        throw new Error('The data decompressor (pako, loaded from cdnjs.cloudflare.com) is not available: check the internet connection.');
+    }
+    const text = atob(encoded.blob);
+    const bytes = new Uint8Array(text.length);
+    for (let i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i);
+    return JSON.parse(pako.ungzip(bytes, { to: 'string' }));
+}
+
+// obj[prop] becomes the decoded series of `encoded` (or, with `decode`, its decoded value), decompressed on first access
+function lazySeries(obj, prop, encoded, decode = decodeSeries) {
     let decoded = null;
     Object.defineProperty(obj, prop, {
-        get() { return decoded || (decoded = decodeSeries(encoded)); },
+        get() { return decoded || (decoded = decode(encoded)); },
         enumerable: true, configurable: true
     });
 }
@@ -44,6 +55,10 @@ function lazySeries(obj, prop, encoded) {
         [balance.loads, balance.generators, ...(balance.storage || []), ...ports]
             .forEach(entry => { if (entry && entry.encoded) lazySeries(entry, 'series', entry.encoded); });
     }
+    // Statistics per bus: rows decoded when the Statistics tab first needs them
+    ((networkData.statistics || {}).items || []).forEach(stat => {
+        if (stat.by_bus && stat.by_bus.encoded) lazySeries(stat.by_bus, 'rows', stat.by_bus.encoded, decodeJson);
+    });
 })();
 
 const HYDRO_COLOR = '#00acc1';
@@ -224,7 +239,7 @@ function slug(text) {
 // Show an error in the view of the tab it came from
 // (Network Components: a box above the graph cards, so the cards themselves are kept)
 const TAB_VIEWS = { summary: 'networkDetails', balance: 'balanceView', components: 'componentsError', statistics: 'statisticsView',
-                    custom: 'customPlotView', explore: 'exploreView' };
+                    custom: 'customPlotView', explore: 'exploreView', comparison: 'comparisonView' };
 function showError(message, tab) {
     const view = document.getElementById(TAB_VIEWS[tab || activeTab] || 'networkDetails');
     if (view) view.innerHTML = `<div class="error-panel"><strong>Error:</strong> ${escapeHtml(message)}</div>`;

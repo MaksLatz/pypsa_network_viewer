@@ -7,7 +7,7 @@ from the internet) that can be opened in any browser and shared as is.
 
 ## Features
 
-The viewer page has six tabs:
+The viewer page has seven tabs:
 
 | Tab | What it shows |
 |---|---|
@@ -16,7 +16,8 @@ The viewer page has six tabs:
 | **Network Components** | Graph cards (add, remove, reorder; time axes zoomed together) with static tables and timeseries plots of every component, global constraints; filters (carrier, type, node, name, peak value, hydro), hydro generation links in Generators – p, unit conversion, CSV download |
 | **Custom Plots** | Your own Plotly figures, with automatic filters and unit conversion when they show network components |
 | **Network Explore** | The interactive map of `n.explore()` (needs bus coordinates) |
-| **Statistics** | The `n.statistics` methods (choose which to show), as bar charts and tables per carrier or per component & carrier, with CSV download |
+| **Statistics** | The `n.statistics` methods (choose which to show), as bar charts and tables per carrier, per component & carrier or per node & carrier; Carrier, Node(s) and hydro bus filters for all cards (averages such as market value are recomputed for the selection), a unit per card, CSV download |
+| **Comparison** | Copies of Power Balance and Network Components graphs (＋ Add to Comparison), one above the other with linked time axes (Stacked) or overlaid in one plot with one y-axis per unit (Overlay, pick the series); a unit per graph; reorder, remove, height, legend, CSV; kept in saved views |
 
 **💾 Save this view** (top right) downloads a copy of the page that opens on the current tab, filters
 and settings — handy to share a specific view. The address bar also remembers the view, as a bookmark
